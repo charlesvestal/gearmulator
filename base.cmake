@@ -82,8 +82,8 @@ else()
 		endif()
 	endif()
 
-	string(APPEND CMAKE_C_FLAGS_RELEASE " -Ofast -fno-stack-protector")
-	string(APPEND CMAKE_CXX_FLAGS_RELEASE " -Ofast -fno-stack-protector")
+	string(APPEND CMAKE_C_FLAGS_RELEASE " -Ofast -fno-stack-protector -funroll-loops -fomit-frame-pointer")
+	string(APPEND CMAKE_CXX_FLAGS_RELEASE " -Ofast -fno-stack-protector -funroll-loops -fomit-frame-pointer")
 	string(APPEND CMAKE_CXX_FLAGS_DEBUG " -rdynamic")
 
 	execute_process(COMMAND uname -m COMMAND tr -d '\n' OUTPUT_VARIABLE ARCHITECTURE)

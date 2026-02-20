@@ -1,5 +1,7 @@
 #include "dspSingle.h"
 
+#include <unistd.h>
+
 #include "dsp56kEmu/dsp.h"
 
 #if DSP56300_DEBUGGER
@@ -169,7 +171,7 @@ namespace virusLib
 		std::thread waitForCommandStreamWrite([this]()
 		{
 			while(m_commandStreamReadIndex < m_commandStream.size())
-				std::this_thread::yield();
+				usleep(1000);
 		});
 
 		// Initialize the DSP
