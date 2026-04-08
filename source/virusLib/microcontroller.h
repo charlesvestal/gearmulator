@@ -71,9 +71,9 @@ public:
 	uint8_t getPartMidiChannel(uint8_t _part) const;
 	bool isPolyPressureForPageBEnabled() const;
 
+	void sendControlCommand(ControlCommand command, uint8_t value);
 private:
 	bool send(Page page, uint8_t part, uint8_t param, uint8_t value);
-	void sendControlCommand(ControlCommand command, uint8_t value);
 	bool sendPreset(uint8_t program, const TPreset& _data, bool isMulti = false);
 	void writeHostBitsWithWait(uint8_t flag0, uint8_t flag1);
 	std::vector<dsp56k::TWord> presetToDSPWords(const TPreset& _preset, bool _isMulti) const;
