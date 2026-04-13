@@ -206,7 +206,7 @@ public:
     genCore(esp, 1, &coreEmitter1, &runCore1, true);
 
     // fflush(logger._file);
-    // printf("JITed ESP cores\n");
+    // JIT stats available via coreEmitter0/1 counters if needed
   }
   
   void setProgramDirty()
@@ -440,11 +440,25 @@ private:
       pre_optimize();
     }
 
+    int emittedCount = 0;
+    int skippedCount = 0;
+    int saveCount = 0;
+    int nomacCount = 0;
+    int macCount = 0;
+    int eramCount = 0;
+
     void emit(int pc, esp::EspJit& _jit, esp::Builder& m_asm)
     {
 		const ESPOptInstr &instr = pram_opt[pc];
 
-    	if (instr.opType == kNop) return;
+    	if (instr.opType == kNop) { skippedCount++; return; }
+
+		emittedCount++;
+		if (instr.m_access.save) saveCount++;
+		if (instr.m_access.nomac) nomacCount++;
+		if (!instr.m_access.nomac && instr.m_access.srcReg != -1) macCount++;
+		if (instr.opType == kReadEramReadLatch || instr.opType == kWriteEramWriteLatch ||
+		    instr.opType == kWriteEramVarOffset) eramCount++;
 
 		_jit.emitOp(pc, instr, lastMul30);
 
