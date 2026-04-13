@@ -122,6 +122,29 @@ namespace jeLib
 		public:
 			void setPostSample(const std::function<void(int32_t, int32_t)>& _postSample) { postSample = _postSample; }
 
+			/* Process a single ASIC2+3 sample driven by external GRAM data.
+			 * Called directly by fork child — no H8S needed. */
+			bool processSampleAsic23() {
+				if (g_je_gram_consume) {
+					int32_t gram[6];
+					if (!g_je_gram_consume(gram)) return false;
+					for (int k = 0; k < 6; k++)
+						asic2.writeGRAM(gram[k], k * 2);
+				}
+				asic2.opt.genProgramIfDirty();
+				asic3.opt.genProgramIfDirty();
+				asic2.opt.callOptimized(&asic2);
+				asic3.opt.callOptimized(&asic3);
+				for (int k = 0; k <= 0xe; k += 2)
+					asic3.writeGRAM(asic2.readGRAM(0x80 + k), k);
+				asic3.writeGRAM(asic2.readGRAM(0xa0), 0x20);
+				asic3.writeGRAM(asic2.readGRAM(0xa2), 0x22);
+				postSample(asic3.readGRAM(0xe8), asic3.readGRAM(0xec));
+				asic2.sync_cores();
+				asic3.sync_cores();
+				return true;
+			}
+
 			void dump() {
 				asic0.dump("dumps/asic0.bin", "dumps/asic0.txt");
 				asic1.dump("dumps/asic1.bin", "dumps/asic1.txt");
@@ -201,6 +224,9 @@ namespace jeLib
 								gram[k] = asic1.readGRAM(0x80 + k * 2);
 							g_je_gram_produce(gram);
 						}
+						// Dummy postSample so Device::process() gets its
+						// expected audio output and doesn't spin forever
+						postSample(0, 0);
 					} else {
 						// Child process: ASIC2+3 only
 						// Receive ASIC1 GRAM from parent via ring
