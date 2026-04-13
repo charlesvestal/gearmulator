@@ -131,24 +131,54 @@ namespace jeLib
 				else if (asic == 3) asic3.writeuC(addr, val);
 			}
 
+			/* Readback register forwarding for fork-parallel mode.
+			 * Child exports ASIC2/3 readback regs so the parent's H8S
+			 * sees current values instead of stale snapshot copies. */
+			void getAsic23Readback(uint8_t *a2, uint8_t *a3) const {
+				asic2.getReadbackRegs(a2);
+				asic3.getReadbackRegs(a3);
+			}
+			void setAsic23Readback(const uint8_t *a2, const uint8_t *a3) {
+				asic2.setReadbackRegs(a2);
+				asic3.setReadbackRegs(a3);
+			}
+
 			/* Process a single ASIC2+3 sample driven by external GRAM data.
-			 * Called directly by fork child — no H8S needed. */
+			 * Called directly by fork child — no H8S needed.
+			 *
+			 * Ordering matches serial mode (mode 0):
+			 *   1. Run ASICs with GRAM from PREVIOUS handoff
+			 *   2. postSample (read audio output)
+			 *   3. Consume new GRAM from ring → write to ASIC2
+			 *   4. ASIC2→ASIC3 handoff
+			 *   5. sync_cores
+			 * This ensures ASIC2 always processes one-sample-old GRAM,
+			 * exactly like the serial path where handoff follows the run. */
 			bool processSampleAsic23() {
+				// 1. Run ASIC2+3 with existing GRAM (from previous iteration or snapshot)
+				asic2.opt.genProgramIfDirty();
+				asic3.opt.genProgramIfDirty();
+				asic2.opt.callOptimized(&asic2);
+				asic3.opt.callOptimized(&asic3);
+
+				// 2. Audio output (before handoffs, matching serial mode)
+				postSample(asic3.readGRAM(0xe8), asic3.readGRAM(0xec));
+
+				// 3. Consume new GRAM from parent (asic1→asic2 handoff equivalent)
 				if (g_je_gram_consume) {
 					int32_t gram[6];
 					if (!g_je_gram_consume(gram)) return false;
 					for (int k = 0; k < 6; k++)
 						asic2.writeGRAM(gram[k], k * 2);
 				}
-				asic2.opt.genProgramIfDirty();
-				asic3.opt.genProgramIfDirty();
-				asic2.opt.callOptimized(&asic2);
-				asic3.opt.callOptimized(&asic3);
+
+				// 4. ASIC2→ASIC3 GRAM handoff (for next sample)
 				for (int k = 0; k <= 0xe; k += 2)
 					asic3.writeGRAM(asic2.readGRAM(0x80 + k), k);
 				asic3.writeGRAM(asic2.readGRAM(0xa0), 0x20);
 				asic3.writeGRAM(asic2.readGRAM(0xa2), 0x22);
-				postSample(asic3.readGRAM(0xe8), asic3.readGRAM(0xec));
+
+				// 5. sync_cores
 				asic2.sync_cores();
 				asic3.sync_cores();
 				return true;
