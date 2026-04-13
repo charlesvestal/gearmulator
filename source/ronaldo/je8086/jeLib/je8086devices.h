@@ -108,6 +108,15 @@ namespace jeLib
 			kFader_PitchEnvD
 		};
 
+		/* Fork-parallel mode (process-local after fork, no race).
+		 * 0 = all ASICs (default), 1 = ASIC0+1 only, 2 = ASIC2+3 only */
+		inline int g_je_parallel_mode = 0;
+		/* Mode 1: called per sample with ASIC1's 6 GRAM handoff values */
+		inline std::function<void(const int32_t*)> g_je_gram_produce;
+		/* Mode 2: called per sample to receive ASIC1's 6 GRAM handoff values.
+		 * Returns false if shutdown requested. */
+		inline std::function<bool(int32_t*)> g_je_gram_consume;
+
 		class MultiAsic : public H8SDevice
 		{
 		public:
@@ -146,38 +155,75 @@ namespace jeLib
 				cyclesResidual = diff % (768/2);
 
 				for (int i = 0; i < samples; i++) {
-					// Intepreter version
-					// for (size_t j = 0; j < (768/2); j++) asic0.step_cores();
-					// for (size_t j = 0; j < (768/2); j++) asic1.step_cores();
-					// for (size_t j = 0; j < (768/2); j++) asic2.step_cores();
-					// for (size_t j = 0; j < (768/2); j++) asic3.step_cores();
+					const int mode = g_je_parallel_mode;
 
-					// JIT version
-					asic0.opt.genProgramIfDirty();
-					asic1.opt.genProgramIfDirty();
-					asic2.opt.genProgramIfDirty();
-					asic3.opt.genProgramIfDirty();
+					if (mode == 0) {
+						// Original serial path — preserved exactly.
+						// All 4 ASICs run with GRAM from previous sample,
+						// then GRAM handoff writes values for next sample.
+						asic0.opt.genProgramIfDirty();
+						asic1.opt.genProgramIfDirty();
+						asic2.opt.genProgramIfDirty();
+						asic3.opt.genProgramIfDirty();
 
-					asic0.opt.callOptimized(&asic0);
-					asic1.opt.callOptimized(&asic1);
-					asic2.opt.callOptimized(&asic2);
-					asic3.opt.callOptimized(&asic3);
+						asic0.opt.callOptimized(&asic0);
+						asic1.opt.callOptimized(&asic1);
+						asic2.opt.callOptimized(&asic2);
+						asic3.opt.callOptimized(&asic3);
 
-					// Last DSP audio output
-					postSample(asic3.readGRAM(0xe8), asic3.readGRAM(0xec));
-					
-					// DSP->DSP communication
-					for (int k = 0; k <= 0x4; k += 2) asic1.writeGRAM(asic0.readGRAM(0x80 + k), k);
-					for (int k = 0; k <= 0xa; k += 2) asic2.writeGRAM(asic1.readGRAM(0x80 + k), k);
-					for (int k = 0; k <= 0xe; k += 2) asic3.writeGRAM(asic2.readGRAM(0x80 + k), k);
-					asic3.writeGRAM(asic2.readGRAM(0xa0), 0x20);
-					asic3.writeGRAM(asic2.readGRAM(0xa2), 0x22);
+						postSample(asic3.readGRAM(0xe8), asic3.readGRAM(0xec));
 
-					// Advance PCs
-					asic0.sync_cores();
-					asic1.sync_cores();
-					asic2.sync_cores();
-					asic3.sync_cores();
+						for (int k = 0; k <= 0x4; k += 2) asic1.writeGRAM(asic0.readGRAM(0x80 + k), k);
+						for (int k = 0; k <= 0xa; k += 2) asic2.writeGRAM(asic1.readGRAM(0x80 + k), k);
+						for (int k = 0; k <= 0xe; k += 2) asic3.writeGRAM(asic2.readGRAM(0x80 + k), k);
+						asic3.writeGRAM(asic2.readGRAM(0xa0), 0x20);
+						asic3.writeGRAM(asic2.readGRAM(0xa2), 0x22);
+
+						asic0.sync_cores();
+						asic1.sync_cores();
+						asic2.sync_cores();
+						asic3.sync_cores();
+					} else if (mode == 1) {
+						// Parent process: ASIC0+1 only
+						asic0.opt.genProgramIfDirty();
+						asic1.opt.genProgramIfDirty();
+						asic0.opt.callOptimized(&asic0);
+						asic1.opt.callOptimized(&asic1);
+						// ASIC0 -> ASIC1 GRAM handoff
+						for (int k = 0; k <= 0x4; k += 2)
+							asic1.writeGRAM(asic0.readGRAM(0x80 + k), k);
+						asic0.sync_cores();
+						asic1.sync_cores();
+						// Send ASIC1 GRAM to child via ring
+						if (g_je_gram_produce) {
+							int32_t gram[6];
+							for (int k = 0; k < 6; k++)
+								gram[k] = asic1.readGRAM(0x80 + k * 2);
+							g_je_gram_produce(gram);
+						}
+					} else {
+						// Child process: ASIC2+3 only
+						// Receive ASIC1 GRAM from parent via ring
+						if (g_je_gram_consume) {
+							int32_t gram[6];
+							if (!g_je_gram_consume(gram)) break;
+							for (int k = 0; k < 6; k++)
+								asic2.writeGRAM(gram[k], k * 2);
+						}
+						asic2.opt.genProgramIfDirty();
+						asic3.opt.genProgramIfDirty();
+						asic2.opt.callOptimized(&asic2);
+						asic3.opt.callOptimized(&asic3);
+						// ASIC2 -> ASIC3 GRAM handoff
+						for (int k = 0; k <= 0xe; k += 2)
+							asic3.writeGRAM(asic2.readGRAM(0x80 + k), k);
+						asic3.writeGRAM(asic2.readGRAM(0xa0), 0x20);
+						asic3.writeGRAM(asic2.readGRAM(0xa2), 0x22);
+						// Audio output
+						postSample(asic3.readGRAM(0xe8), asic3.readGRAM(0xec));
+						asic2.sync_cores();
+						asic3.sync_cores();
+					}
 				}
 			}
 		protected:
