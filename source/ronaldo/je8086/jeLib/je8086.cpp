@@ -130,6 +130,62 @@ namespace jeLib
 		SysexRemoteControl::sendSysexLcdCgRam(m_midiOutEvents, lcd);
 	}
 
+	bool Je8086::saveSnapshot(const char *path) {
+		FILE *f = fopen(path, "wb");
+		if (!f) return false;
+
+		const char magic[] = "JE86SNAP";
+		uint32_t version = 1;
+		fwrite(magic, 8, 1, f);
+		fwrite(&version, 4, 1, f);
+
+		/* H8S CPU state (16MB memory + registers) */
+		fwrite(emu.memory, sizeof(emu.memory), 1, f);
+		fwrite(emu.regs, sizeof(emu.regs), 1, f);
+		int32_t pc_offset = emu.pcoff(emu.pc);
+		fwrite(&pc_offset, sizeof(pc_offset), 1, f);
+		fwrite(&emu.ccr, sizeof(emu.ccr), 1, f);
+		fwrite(&emu.exr, sizeof(emu.exr), 1, f);
+		fwrite(&emu.cycles, sizeof(emu.cycles), 1, f);
+		fwrite(&emu.pending_irqs, sizeof(emu.pending_irqs), 1, f);
+
+		/* MultiAsic (4 ESP ASICs + cycle tracking) */
+		if (!asics.saveState(f)) { fclose(f); return false; }
+
+		fclose(f);
+		return true;
+	}
+
+	bool Je8086::loadSnapshot(const char *path) {
+		FILE *f = fopen(path, "rb");
+		if (!f) return false;
+
+		char magic[8];
+		uint32_t version;
+		if (fread(magic, 8, 1, f) != 1 || fread(&version, 4, 1, f) != 1) { fclose(f); return false; }
+		if (memcmp(magic, "JE86SNAP", 8) != 0 || version != 1) { fclose(f); return false; }
+
+		/* H8S CPU state */
+		if (fread(emu.memory, sizeof(emu.memory), 1, f) != 1) { fclose(f); return false; }
+		fread(emu.regs, sizeof(emu.regs), 1, f);
+		int32_t pc_offset;
+		fread(&pc_offset, sizeof(pc_offset), 1, f);
+		emu.pc = emu.makepc(pc_offset);
+		fread(&emu.ccr, sizeof(emu.ccr), 1, f);
+		fread(&emu.exr, sizeof(emu.exr), 1, f);
+		fread(&emu.cycles, sizeof(emu.cycles), 1, f);
+		fread(&emu.pending_irqs, sizeof(emu.pending_irqs), 1, f);
+
+		/* MultiAsic */
+		if (!asics.loadState(f)) { fclose(f); return false; }
+
+		/* Re-bind the audio output callback */
+		asics.setPostSample([this](const int32_t _left, const int32_t _right) { onReceiveSample(_left, _right); });
+
+		fclose(f);
+		return true;
+	}
+
 	void Je8086::runfactoryreset(const std::string& _ramDataFilename)
 	{
 		using namespace devices;
