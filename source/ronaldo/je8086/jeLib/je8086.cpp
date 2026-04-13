@@ -179,8 +179,19 @@ namespace jeLib
 		/* MultiAsic */
 		if (!asics.loadState(f)) { fclose(f); return false; }
 
-		/* Re-bind the audio output callback */
+		/* Re-bind callbacks and MIDI setup (not serialized) */
 		asics.setPostSample([this](const int32_t _left, const int32_t _right) { onReceiveSample(_left, _right); });
+		m_midiInRateLimiter.setSamplerate(88200.0f);
+		m_midiInRateLimiter.setDefaultRateLimit();
+		m_midiInRateLimiter.setSysexPause(0.021f);
+		m_midiInRateLimiter.setSysexPauseLengthThreshold(100);
+		lcd.setChangeCallback([this] { onLcdDdRamChanged(); });
+		lcd.setCgRamChangeCallback([this] { onLcdCgRamChanged(); });
+
+		/* Sync device cycle counters to restored CPU cycles
+		 * (prevents timers/serial from firing millions of missed interrupts) */
+		timers.syncCycles();
+		midi.syncCycles();
 
 		fclose(f);
 		return true;
