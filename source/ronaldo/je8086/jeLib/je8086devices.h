@@ -145,7 +145,28 @@ namespace jeLib
 				return true;
 			}
 
-			void dump() {
+			bool saveState(FILE *f) const {
+			if (!asic0.saveState(f)) return false;
+			if (!asic1.saveState(f)) return false;
+			if (!asic2.saveState(f)) return false;
+			if (!asic3.saveState(f)) return false;
+			fwrite(&lastCycles, sizeof(lastCycles), 1, f);
+			fwrite(&cyclesResidual, sizeof(cyclesResidual), 1, f);
+			fwrite(&cycles_this_sample, sizeof(cycles_this_sample), 1, f);
+			return true;
+		}
+		bool loadState(FILE *f) {
+			if (!asic0.loadState(f)) return false;
+			if (!asic1.loadState(f)) return false;
+			if (!asic2.loadState(f)) return false;
+			if (!asic3.loadState(f)) return false;
+			fread(&lastCycles, sizeof(lastCycles), 1, f);
+			fread(&cyclesResidual, sizeof(cyclesResidual), 1, f);
+			fread(&cycles_this_sample, sizeof(cycles_this_sample), 1, f);
+			return true;
+		}
+
+		void dump() {
 				asic0.dump("dumps/asic0.bin", "dumps/asic0.txt");
 				asic1.dump("dumps/asic1.bin", "dumps/asic1.txt");
 				asic2.dump("dumps/asic2.bin", "dumps/asic2.txt");

@@ -49,6 +49,43 @@ public:
 		eramActiveCurrent = eramActiveNext = false;
 	}
 	
+	bool saveState(FILE *f) const {
+		if (eram_size) { if (fwrite(eram, sizeof(int32_t), eram_size, f) != (size_t)eram_size) return false; }
+		fwrite(&eramPos, sizeof(eramPos), 1, f);
+		fwrite(&eramEffectiveAddr, sizeof(eramEffectiveAddr), 1, f);
+		fwrite(&eramImmOffsetAccNext, sizeof(eramImmOffsetAccNext), 1, f);
+		fwrite(&eramHighOffset, sizeof(eramHighOffset), 1, f);
+		fwrite(&eramReadLatch, sizeof(eramReadLatch), 1, f);
+		fwrite(&eramWriteLatch, sizeof(eramWriteLatch), 1, f);
+		fwrite(&eramWriteLatchNext, sizeof(eramWriteLatchNext), 1, f);
+		fwrite(&eramVarOffset, sizeof(eramVarOffset), 1, f);
+		fwrite(&eramPCCommit, sizeof(eramPCCommit), 1, f);
+		fwrite(&eramPCStartNext, sizeof(eramPCStartNext), 1, f);
+		fwrite(&eramModeCurrent, sizeof(eramModeCurrent), 1, f);
+		fwrite(&eramModeNext, sizeof(eramModeNext), 1, f);
+		fwrite(&eramActiveCurrent, sizeof(eramActiveCurrent), 1, f);
+		fwrite(&eramActiveNext, sizeof(eramActiveNext), 1, f);
+		return true;
+	}
+	bool loadState(FILE *f) {
+		if (eram_size) { if (fread(eram, sizeof(int32_t), eram_size, f) != (size_t)eram_size) return false; }
+		fread(&eramPos, sizeof(eramPos), 1, f);
+		fread(&eramEffectiveAddr, sizeof(eramEffectiveAddr), 1, f);
+		fread(&eramImmOffsetAccNext, sizeof(eramImmOffsetAccNext), 1, f);
+		fread(&eramHighOffset, sizeof(eramHighOffset), 1, f);
+		fread(&eramReadLatch, sizeof(eramReadLatch), 1, f);
+		fread(&eramWriteLatch, sizeof(eramWriteLatch), 1, f);
+		fread(&eramWriteLatchNext, sizeof(eramWriteLatchNext), 1, f);
+		fread(&eramVarOffset, sizeof(eramVarOffset), 1, f);
+		fread(&eramPCCommit, sizeof(eramPCCommit), 1, f);
+		fread(&eramPCStartNext, sizeof(eramPCStartNext), 1, f);
+		fread(&eramModeCurrent, sizeof(eramModeCurrent), 1, f);
+		fread(&eramModeNext, sizeof(eramModeNext), 1, f);
+		fread(&eramActiveCurrent, sizeof(eramActiveCurrent), 1, f);
+		fread(&eramActiveNext, sizeof(eramActiveNext), 1, f);
+		return true;
+	}
+
 	void tickSample() { eramPos = (eramPos - 1) & ERAM_MASK_FULL; }
 	
 	void tickCycle(const uint8_t eramCtrl, const uint16_t pc) {
@@ -132,6 +169,19 @@ struct SharedState {
 		memset(mulcoeffs, 0, sizeof(mulcoeffs));
 		eram.reset();
 	}
+
+	bool saveState(FILE *f) const {
+		fwrite(gram, sizeof(gram), 1, f);
+		fwrite(readback_regs, sizeof(readback_regs), 1, f);
+		fwrite(mulcoeffs, sizeof(mulcoeffs), 1, f);
+		return eram.saveState(f);
+	}
+	bool loadState(FILE *f) {
+		fread(gram, sizeof(gram), 1, f);
+		fread(readback_regs, sizeof(readback_regs), 1, f);
+		fread(mulcoeffs, sizeof(mulcoeffs), 1, f);
+		return eram.loadState(f);
+	}
 };
 
 template<int lg2eram_size>
@@ -154,7 +204,36 @@ public:
 		pc = 0;
 		iramPos = (iramPos - 1) & IRAM_MASK;
 	}
-	
+
+	bool saveState(FILE *f) const {
+		fwrite(iram, sizeof(iram), 1, f);
+		fwrite(&pc, sizeof(pc), 1, f);
+		fwrite(&iramPos, sizeof(iramPos), 1, f);
+		fwrite(&pcjumpat, sizeof(pcjumpat), 1, f);
+		fwrite(&pcjumpto, sizeof(pcjumpto), 1, f);
+		fwrite(&last_mulInputA_24, sizeof(last_mulInputA_24), 1, f);
+		fwrite(&last_mulInputB_24, sizeof(last_mulInputB_24), 1, f);
+		fwrite(&skipfield, sizeof(skipfield), 1, f);
+		fwrite(&lastMul30, sizeof(lastMul30), 1, f);
+		fwrite(&accA, sizeof(accA), 1, f);
+		fwrite(&accB, sizeof(accB), 1, f);
+		return true;
+	}
+	bool loadState(FILE *f) {
+		fread(iram, sizeof(iram), 1, f);
+		fread(&pc, sizeof(pc), 1, f);
+		fread(&iramPos, sizeof(iramPos), 1, f);
+		fread(&pcjumpat, sizeof(pcjumpat), 1, f);
+		fread(&pcjumpto, sizeof(pcjumpto), 1, f);
+		fread(&last_mulInputA_24, sizeof(last_mulInputA_24), 1, f);
+		fread(&last_mulInputB_24, sizeof(last_mulInputB_24), 1, f);
+		fread(&skipfield, sizeof(skipfield), 1, f);
+		fread(&lastMul30, sizeof(lastMul30), 1, f);
+		fread(&accA, sizeof(accA), 1, f);
+		fread(&accB, sizeof(accB), 1, f);
+		return true;
+	}
+
 	void steperam() { if (lg2eram_size) shared->eram.tickCycle((pram[pc] >> 23) & 0x1f, pc); }
 
 	void step() {
@@ -476,6 +555,31 @@ public:
 		else {
 			// printf("Asic unknown %x write 0x%06x, 0x%02x\n",if_mode,address, value&255);
 		}
+	}
+
+	bool saveState(FILE *f) const {
+		fwrite(intmem, sizeof(intmem), 1, f);
+		fwrite(&if_mode, sizeof(if_mode), 1, f);
+		fwrite(&addr_sel, sizeof(addr_sel), 1, f);
+		fwrite(program_writing_word, sizeof(program_writing_word), 1, f);
+		if (!core0.saveState(f)) return false;
+		if (!core1.saveState(f)) return false;
+		if (!shared.saveState(f)) return false;
+		return true;
+	}
+	bool loadState(FILE *f) {
+		fread(intmem, sizeof(intmem), 1, f);
+		fread(&if_mode, sizeof(if_mode), 1, f);
+		fread(&addr_sel, sizeof(addr_sel), 1, f);
+		fread(program_writing_word, sizeof(program_writing_word), 1, f);
+		if (!core0.loadState(f)) return false;
+		if (!core1.loadState(f)) return false;
+		if (!shared.loadState(f)) return false;
+		/* Restore internal pointers and mark JIT dirty */
+		core0.setup((uint32_t*)&intmem[0x0000], &shared);
+		core1.setup((uint32_t*)&intmem[0x1000], &shared);
+		opt.setProgramDirty();
+		return true;
 	}
 
 	// Debug

@@ -33,6 +33,9 @@ namespace jeLib
 
 		devices::MultiAsic& getAsics() { return asics; }
 
+		bool saveSnapshot(const char *path);
+		bool loadSnapshot(const char *path);
+
 	private:
 		static void onLedsChanged(devices::Port* _port);
 		void onReceiveMidiByte(uint8_t _byte);
