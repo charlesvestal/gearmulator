@@ -31,6 +31,8 @@ namespace jeLib
 
 		void setButton(devices::SwitchType _type, bool _pressed);
 
+		devices::MultiAsic& getAsics() { return asics; }
+
 	private:
 		static void onLedsChanged(devices::Port* _port);
 		void onReceiveMidiByte(uint8_t _byte);
