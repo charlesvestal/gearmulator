@@ -20,6 +20,10 @@ public:
 	void tick_extclock(int which) {
 		channels[which].gra++;
 	}
+	/* Sync lastCycles to current CPU cycles (call after snapshot restore
+	 * to prevent timer from firing millions of missed interrupts) */
+	void syncCycles() { lastCycles = state->cycles; }
+
 	void tick()
 	{
 		for (int i = 0; i < 5; i++)
@@ -192,6 +196,7 @@ class Serial : public H8SDevice
 {
 public:
 	Serial(int _irqoff = 0, std::function<void(uint8_t)>&& _outputCallback = [](uint8_t) {}) : irqoff(_irqoff), outputCallback(std::move(_outputCallback)) {}
+	void syncCycles() { lastcycles = state->getCycles(); }
 	virtual uint8_t read(uint32_t address) {
 		address &= 7;
 		switch (address)
