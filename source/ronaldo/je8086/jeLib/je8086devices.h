@@ -116,11 +116,20 @@ namespace jeLib
 		/* Mode 2: called per sample to receive ASIC1's 6 GRAM handoff values.
 		 * Returns false if shutdown requested. */
 		inline std::function<bool(int32_t*)> g_je_gram_consume;
+		/* Mode 1: called when H8S writes to ASIC2/3 registers (PRAM programming).
+		 * Forwards the write to the child process so ASIC2/3 see patch changes. */
+		inline std::function<void(int asic, uint32_t addr, uint8_t val)> g_je_uc_write_forward;
 
 		class MultiAsic : public H8SDevice
 		{
 		public:
 			void setPostSample(const std::function<void(int32_t, int32_t)>& _postSample) { postSample = _postSample; }
+
+			/* Apply a forwarded uC write to ASIC2 or ASIC3 (child process) */
+			void applyUcWrite(int asic, uint32_t addr, uint8_t val) {
+				if (asic == 2) asic2.writeuC(addr, val);
+				else if (asic == 3) asic3.writeuC(addr, val);
+			}
 
 			/* Process a single ASIC2+3 sample driven by external GRAM data.
 			 * Called directly by fork child — no H8S needed. */
@@ -187,8 +196,16 @@ namespace jeLib
 				const int asic = (_address >> 14) & 3; _address &= 0x3fff;
 				if (asic == 0) asic0.writeuC(_address, _value);
 				else if (asic == 1) asic1.writeuC(_address, _value);
-				else if (asic == 2) asic2.writeuC(_address, _value);
-				else asic3.writeuC(_address, _value);
+				else if (asic == 2) {
+					asic2.writeuC(_address, _value);
+					if (g_je_parallel_mode == 1 && g_je_uc_write_forward)
+						g_je_uc_write_forward(2, _address, _value);
+				}
+				else {
+					asic3.writeuC(_address, _value);
+					if (g_je_parallel_mode == 1 && g_je_uc_write_forward)
+						g_je_uc_write_forward(3, _address, _value);
+				}
 			}
 			
 			void runForCycles(uint64_t cycles) {
