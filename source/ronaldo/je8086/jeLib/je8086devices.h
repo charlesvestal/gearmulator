@@ -275,7 +275,13 @@ namespace jeLib
 						asic2.sync_cores();
 						asic3.sync_cores();
 					} else if (mode == 1) {
-						// Parent process: ASIC0+1 only
+						// Parent process: ASIC0+1 only.
+						// Must mirror mode 0's ordering: ASIC1 handoff READ happens
+						// BEFORE sync_cores. GRAM is a rotating buffer indexed by
+						// (offset + iramPos), and sync_cores decrements iramPos,
+						// so a post-sync read returns the previous sample's
+						// neighbouring slot — silently producing data shifted by
+						// one GRAM address.
 						asic0.opt.genProgramIfDirty();
 						asic1.opt.genProgramIfDirty();
 						asic0.opt.callOptimized(&asic0);
@@ -283,15 +289,15 @@ namespace jeLib
 						// ASIC0 -> ASIC1 GRAM handoff
 						for (int k = 0; k <= 0x4; k += 2)
 							asic1.writeGRAM(asic0.readGRAM(0x80 + k), k);
-						asic0.sync_cores();
-						asic1.sync_cores();
-						// Send ASIC1 GRAM to child via ring
+						// Read ASIC1 outputs PRE-sync (same point as serial mode 0)
 						if (g_je_gram_produce) {
 							int32_t gram[6];
 							for (int k = 0; k < 6; k++)
 								gram[k] = asic1.readGRAM(0x80 + k * 2);
 							g_je_gram_produce(gram);
 						}
+						asic0.sync_cores();
+						asic1.sync_cores();
 						// Dummy postSample so Device::process() gets its
 						// expected audio output and doesn't spin forever
 						postSample(0, 0);
