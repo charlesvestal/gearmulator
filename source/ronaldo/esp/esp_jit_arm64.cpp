@@ -197,8 +197,10 @@ namespace esp
 
 		if (instr.opType != kMulCoef && !(instr.opType == kDMAC && lastMul30))
 		{
-			// int32_t mulInputB_24 = instr.coefSigned (constant per PC, use immediate)
-			m_asm.mov(mulInB, (int64_t)instr.coefSigned);
+			// int32_t mulInputB_24 = instr.coef;
+			// m_asm.mov(tempD, (int64_t)instr.coefSigned); // TODO: separate coefs
+
+			m_asm.ldrsb(mulInB, ptr(ptrVars, offsetof(CoreData, coefs) + pc));
 		}
 
 		bool setcondition = false;
@@ -383,13 +385,15 @@ namespace esp
 			int64_t destAcc = instr.m_access.destReg;
 
 			// result = (int64_t)se<24>(mulInputA_24) * (int64_t) mulInputB_24;
-			// SBFX sign-extends from a 24-bit field in one instruction
-			m_asm.sbfx(mulInA, mulInA, 0, 24);
+			m_asm.and_(mulInA, mulInA, 0xffffff);
+			m_asm.lsl(mulInA, mulInA, 64 - 24);
+			m_asm.asr(mulInA, mulInA, 64 - 24);
 			m_asm.mul(tempA, mulInA, mulInB);
 
-			// result >>= instr.shiftAmount (constant per PC, use immediate)
-			if (instr.shiftAmount > 0)
-				m_asm.asr(tempA, tempA, instr.shiftAmount);
+			// result >>= instr.shiftAmount;
+			// m_asm.asr(tempA, tempA, instr.shiftAmount);
+			m_asm.ldrsb(mulInB, ptr(ptrVars, offsetof(CoreData, shiftAmounts) + pc));
+			m_asm.asr(tempA, tempA, mulInB);
 
 			if (!clr)
 			{
