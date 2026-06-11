@@ -1,5 +1,6 @@
 #pragma once
 #include "h8s.hpp"
+#include <cstdio>
 #include <functional>
 #include <queue>
 
@@ -132,6 +133,35 @@ public:
 		}
 	}
 
+	/* Snapshot support: timer config registers live here (not in CPU
+	 * memory), so they must be saved/restored explicitly. */
+	bool saveState(FILE *f) const {
+		fwrite(&lastCycles, sizeof(lastCycles), 1, f);
+		fwrite(space, sizeof(space), 1, f);
+		fwrite(&tstr, 1, 1, f); fwrite(&tsnc, 1, 1, f);
+		fwrite(&tmdr, 1, 1, f); fwrite(&tfcr, 1, 1, f);
+		for (const auto& c : channels) {
+			fwrite(&c.tcnt, sizeof(c.tcnt), 1, f);
+			fwrite(&c.gra, sizeof(c.gra), 1, f);
+			fwrite(&c.grb, sizeof(c.grb), 1, f);
+			fwrite(&c.tcr, 1, 1, f); fwrite(&c.tsr, 1, 1, f); fwrite(&c.tier, 1, 1, f);
+		}
+		return !ferror(f);
+	}
+	bool loadState(FILE *f) {
+		if (fread(&lastCycles, sizeof(lastCycles), 1, f) != 1) return false;
+		if (fread(space, sizeof(space), 1, f) != 1) return false;
+		fread(&tstr, 1, 1, f); fread(&tsnc, 1, 1, f);
+		fread(&tmdr, 1, 1, f); fread(&tfcr, 1, 1, f);
+		for (auto& c : channels) {
+			fread(&c.tcnt, sizeof(c.tcnt), 1, f);
+			fread(&c.gra, sizeof(c.gra), 1, f);
+			fread(&c.grb, sizeof(c.grb), 1, f);
+			fread(&c.tcr, 1, 1, f); fread(&c.tsr, 1, 1, f); fread(&c.tier, 1, 1, f);
+		}
+		return !ferror(f) && !feof(f);
+	}
+
 private:	// 0x9f -> 0x60
 	unsigned long long lastCycles {0};
 	int8 space[64] {};
@@ -236,6 +266,34 @@ public:
 		}
 	}
 	void provideMIDI(const uint8 *data, size_t len) {for (size_t i = 0; i < len; i++) tosend.push(data[i]);}
+
+	/* Snapshot support: SCI registers (incl. receive/interrupt enables in
+	 * scr) live here, not in CPU memory. */
+	bool saveState(FILE *f) const {
+		fwrite(data, sizeof(data), 1, f);
+		fwrite(&scr, 1, 1, f); fwrite(&txr, 1, 1, f);
+		fwrite(&rdr, 1, 1, f); fwrite(&ssr, 1, 1, f);
+		fwrite(&lastcycles, sizeof(lastcycles), 1, f);
+		fwrite(&txrtimer, sizeof(txrtimer), 1, f);
+		std::queue<uint8> q = tosend;
+		uint32_t n = (uint32_t)q.size();
+		fwrite(&n, sizeof(n), 1, f);
+		while (!q.empty()) { uint8 b = q.front(); q.pop(); fwrite(&b, 1, 1, f); }
+		return !ferror(f);
+	}
+	bool loadState(FILE *f) {
+		if (fread(data, sizeof(data), 1, f) != 1) return false;
+		fread(&scr, 1, 1, f); fread(&txr, 1, 1, f);
+		fread(&rdr, 1, 1, f); fread(&ssr, 1, 1, f);
+		fread(&lastcycles, sizeof(lastcycles), 1, f);
+		fread(&txrtimer, sizeof(txrtimer), 1, f);
+		uint32_t n = 0;
+		fread(&n, sizeof(n), 1, f);
+		while (!tosend.empty()) tosend.pop();
+		for (uint32_t i = 0; i < n && !feof(f); i++) { uint8 b; fread(&b, 1, 1, f); tosend.push(b); }
+		return !ferror(f) && !feof(f);
+	}
+
 	void tick()
 	{
 		if (txrtimer)
@@ -378,6 +436,10 @@ public:
 	HWRegs() {}
 	virtual uint8_t read(uint32_t address) { return data[address&255]; }
 	virtual void write(uint32_t address, uint8_t value) { data[address&255] = value; }
+
+	/* Snapshot support: holds interrupt enables and misc hw config. */
+	bool saveState(FILE *f) const { fwrite(data, sizeof(data), 1, f); return !ferror(f); }
+	bool loadState(FILE *f) { return fread(data, sizeof(data), 1, f) == 1; }
 protected:
 	int8 data[256];
 };

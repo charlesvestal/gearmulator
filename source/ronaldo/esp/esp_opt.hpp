@@ -8,6 +8,11 @@
 
 constexpr int PRAM_SIZE = 768;
 
+/* Diagnostics: global counters for JIT activity (all ESP instances). */
+inline uint64_t g_esp_genprogram_count = 0;
+inline uint64_t g_esp_dirty_count = 0;
+inline uint64_t g_esp_updatecoef_count = 0;
+
 struct CoreData {
   int32_t *hostRegPtr;
   int32_t *eramPtr;
@@ -190,6 +195,7 @@ public:
 
   void genProgram(ESP<lg2eram_size>* esp)
   {
+    ++g_esp_genprogram_count;
     if (runCore0) m_rt.release(runCore0);
     if (runCore1) m_rt.release(runCore1);
 
@@ -211,6 +217,7 @@ public:
   
   void setProgramDirty()
   {
+	  ++g_esp_dirty_count;
 	  m_programDirty = 3;
   }
 
@@ -225,6 +232,7 @@ public:
 
   void updateCoef(ESP<lg2eram_size>* esp)
   {
+    ++g_esp_updatecoef_count;
     for (size_t i = 0; i < PRAM_SIZE; i++) {
       uint32_t instr = esp->core0.pram[i];
       uint32_t op = (instr >> 16) & 0x7c;

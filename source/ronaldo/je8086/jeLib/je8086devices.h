@@ -120,6 +120,11 @@ namespace jeLib
 		 * Forwards the write to the child process so ASIC2/3 see patch changes. */
 		inline std::function<void(int asic, uint32_t addr, uint8_t val)> g_je_uc_write_forward;
 
+		/* Diagnostic: fires on EVERY H8S→ASIC write, all 4 ASICs, regardless
+		 * of parallel mode. Used by spike_protocol to characterize the
+		 * H8S↔ESP boundary for native-DSP feasibility analysis. */
+		inline std::function<void(int asic, uint32_t addr, uint8_t val)> g_je_uc_write_capture;
+
 		class MultiAsic : public H8SDevice
 		{
 		public:
@@ -224,6 +229,8 @@ namespace jeLib
 			void write(uint32_t _address, uint8_t _value) override
 			{
 				const int asic = (_address >> 14) & 3; _address &= 0x3fff;
+				if (g_je_uc_write_capture)
+					g_je_uc_write_capture(asic, _address, _value);
 				if (asic == 0) asic0.writeuC(_address, _value);
 				else if (asic == 1) asic1.writeuC(_address, _value);
 				else if (asic == 2) {
@@ -396,6 +403,23 @@ namespace jeLib
 			static int getLedId(const uint32_t _index) {return lits[_index];}
 
 			bool getLed(const uint32_t _i) const { const int w = getLedId(_i); return (leds[w >> 3] & (1 << (w & 7))); }
+
+			/* Snapshot support: port latches + DDR config. */
+			bool saveState(FILE *f) const {
+				fwrite(data, sizeof(data), 1, f); fwrite(leds, sizeof(leds), 1, f);
+				fwrite(&latch, sizeof(latch), 1, f);
+				uint8_t la = latchA ? 1 : 0; fwrite(&la, 1, 1, f);
+				fwrite(&portAstate, 1, 1, f); fwrite(&portBDDR, 1, 1, f); fwrite(&portBDR, 1, 1, f);
+				return !ferror(f);
+			}
+			bool loadState(FILE *f) {
+				if (fread(data, sizeof(data), 1, f) != 1) return false;
+				fread(leds, sizeof(leds), 1, f);
+				fread(&latch, sizeof(latch), 1, f);
+				uint8_t la = 0; fread(&la, 1, 1, f); latchA = la != 0;
+				fread(&portAstate, 1, 1, f); fread(&portBDDR, 1, 1, f); fread(&portBDR, 1, 1, f);
+				return !ferror(f) && !feof(f);
+			}
 		protected:
 			static int lits[];
 			static const char* const litnames[66];
@@ -447,6 +471,18 @@ namespace jeLib
 				// n >=16 = VR(n - 15).
 				// e.g. cutoff = VR12, so n = 12 + 15 = 27. See datasheet.
 				values[which] = value;
+			}
+
+			/* Snapshot support: ADC scan state + fader values. */
+			bool saveState(FILE *f) const {
+				fwrite(&scanning, 1, 1, f); fwrite(&p6dr, 1, 1, f); fwrite(&adcsr, 1, 1, f);
+				fwrite(values, sizeof(values), 1, f);
+				return !ferror(f);
+			}
+			bool loadState(FILE *f) {
+				if (fread(&scanning, 1, 1, f) != 1) return false;
+				fread(&p6dr, 1, 1, f); fread(&adcsr, 1, 1, f);
+				return fread(values, sizeof(values), 1, f) == 1;
 			}
 		protected:
 			int8 scanning {0}, p6dr {0}, adcsr {0};
