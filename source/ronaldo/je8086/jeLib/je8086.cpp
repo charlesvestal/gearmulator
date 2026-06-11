@@ -135,7 +135,7 @@ namespace jeLib
 		if (!f) return false;
 
 		const char magic[] = "JE86SNAP";
-		uint32_t version = 1;
+		uint32_t version = 2;
 		fwrite(magic, 8, 1, f);
 		fwrite(&version, 4, 1, f);
 
@@ -152,6 +152,16 @@ namespace jeLib
 		/* MultiAsic (4 ESP ASICs + cycle tracking) */
 		if (!asics.saveState(f)) { fclose(f); return false; }
 
+		/* v2: memory-mapped peripheral state. These registers live in the
+		 * device objects, NOT in emu.memory — without them a restored
+		 * firmware finds its timers halted and the MIDI SCI disabled and
+		 * never reconfigures them (it believes it already did at boot). */
+		if (!timers.saveState(f)) { fclose(f); return false; }
+		if (!midi.saveState(f))   { fclose(f); return false; }
+		if (!hwregs.saveState(f)) { fclose(f); return false; }
+		if (!faders.saveState(f)) { fclose(f); return false; }
+		if (!ports.saveState(f))  { fclose(f); return false; }
+
 		fclose(f);
 		return true;
 	}
@@ -163,7 +173,7 @@ namespace jeLib
 		char magic[8];
 		uint32_t version;
 		if (fread(magic, 8, 1, f) != 1 || fread(&version, 4, 1, f) != 1) { fclose(f); return false; }
-		if (memcmp(magic, "JE86SNAP", 8) != 0 || version != 1) { fclose(f); return false; }
+		if (memcmp(magic, "JE86SNAP", 8) != 0 || version != 2) { fclose(f); return false; }
 
 		/* H8S CPU state */
 		if (fread(emu.memory, sizeof(emu.memory), 1, f) != 1) { fclose(f); return false; }
@@ -178,6 +188,13 @@ namespace jeLib
 
 		/* MultiAsic */
 		if (!asics.loadState(f)) { fclose(f); return false; }
+
+		/* v2: memory-mapped peripheral state */
+		if (!timers.loadState(f)) { fclose(f); return false; }
+		if (!midi.loadState(f))   { fclose(f); return false; }
+		if (!hwregs.loadState(f)) { fclose(f); return false; }
+		if (!faders.loadState(f)) { fclose(f); return false; }
+		if (!ports.loadState(f))  { fclose(f); return false; }
 
 		/* Re-bind callbacks and MIDI setup (not serialized) */
 		asics.setPostSample([this](const int32_t _left, const int32_t _right) { onReceiveSample(_left, _right); });
