@@ -962,6 +962,20 @@ bool Microcontroller::requestSingle(BankNumber _bank, uint8_t _program, TPreset&
 	return getSingle(_bank, _program, _data);
 }
 
+bool Microcontroller::peekSingleEditBuffer(TPreset& _data) const
+{
+	// Move/schwung: copy the cached single-edit-buffer under the mutex, without
+	// requestSingle(EditBuffer)'s receiveUpgradedPreset() call. That side effect
+	// reads/clears the shared HDI08 TX parser and, when driven every few blocks by
+	// the autosave refresh on the emu-loop thread, races the audio thread feeding the
+	// same parser via m_hdi08.exec() (which runs outside the mutex) and can latch the
+	// preset-receive confirmation permanently. This read-only copy keeps the autosave's
+	// current-single fresh while leaving the parser untouched.
+	std::lock_guard lock(m_mutex);
+	_data = m_singleEditBuffer;
+	return true;
+}
+
 bool Microcontroller::writeSingle(BankNumber _bank, uint8_t _program, const TPreset& _data)
 {
 	if (_bank != BankNumber::EditBuffer) 
