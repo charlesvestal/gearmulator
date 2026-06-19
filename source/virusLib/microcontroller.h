@@ -135,6 +135,11 @@ private:
 
 	mutable std::recursive_mutex m_mutex;
 	bool m_loadingState = false;
+
+	// Move/schwung: process() cycles a queued preset write has been stalled waiting for
+	// a preset-receive confirmation that never arrives; watchdog in process() gives up
+	// the wait once this passes a threshold. See process() for the full rationale.
+	uint32_t m_presetReceiveStall = 0;
 };
 
 }

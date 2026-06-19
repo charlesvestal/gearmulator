@@ -1089,6 +1089,30 @@ void Microcontroller::process()
 
 	std::lock_guard lock(m_mutex);
 
+	// Move/schwung watchdog: the DSP's preset-receive confirmation token (0xf4f4f4 /
+	// 0xf400f4) can be missed when the HDI08 TX stream is busy — e.g. a state-restore
+	// param overlay flooding the bus right after a preset load. That latches
+	// waitingForPresetReceiveConfirmation() true forever, so every queued preset write
+	// below stalls indefinitely and patch changes silently stop taking effect (while
+	// direct param writes keep working). If a preset write is queued and otherwise
+	// ready to flush (not loading, RX drained) but the confirmation has not arrived for
+	// many process() cycles, give up the wait — equivalent to the DSP's own
+	// "no upgrade needed" path — so the queue can drain. Normal confirmations arrive
+	// within a cycle or two, so this never fires in the healthy case.
+	if(!m_pendingPresetWrites.empty() && !m_loadingState && m_hdi08.rxEmpty() && waitingForPresetReceiveConfirmation())
+	{
+		if(++m_presetReceiveStall >= 32)
+		{
+			for(auto& parser : m_hdi08TxParsers)
+				parser.waitForPreset(0);
+			m_presetReceiveStall = 0;
+		}
+	}
+	else
+	{
+		m_presetReceiveStall = 0;
+	}
+
 	if(m_loadingState || m_pendingPresetWrites.empty() || !m_hdi08.rxEmpty() || waitingForPresetReceiveConfirmation())
 		return;
 
