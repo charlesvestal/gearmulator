@@ -267,9 +267,72 @@ namespace jeLib
 						asic0.opt.callOptimized(&asic0);
 						asic1.opt.callOptimized(&asic1);
 						asic2.opt.callOptimized(&asic2);
-						asic3.opt.callOptimized(&asic3);
+
+						// --- ESP_SNAP: bit-exact oracle (REVERT after dump) ---
+						// Dump asic3 full DSP state immediately before and after its
+						// callOptimized over a sustain window, so a faithful Python ESP
+						// interpreter can be validated interp(pre)==post bit-exact and
+						// then used to trace/lift the voice ladder filter. Env-gated.
+						{
+							static const long kS0 = 46000, kSN = 4096;
+							static FILE* fp = nullptr; static int init = 0; static long n = 0;
+							if (!init) { init = 1; if (const char* d = getenv("ESP_SNAP")) fp = fopen(d, "wb"); }
+							bool in = fp && n >= kS0 && n < kS0 + kSN;
+							if (in) asic3.dumpSnapshot(fp);          // pre
+							asic3.opt.callOptimized(&asic3);
+							if (in) asic3.dumpSnapshot(fp);          // post
+							n++;
+						}
 
 						postSample(asic3.readGRAM(0xe8), asic3.readGRAM(0xec));
+
+						// --- ESP_TAP: per-sample filter reference (REVERT after dump) ---
+						// The active-voice ladder filter is asic0 CORE0 (proven: its HPF
+						// coeffs gram 0x21/0x23 hold the documented C4 value 2939329).
+						// core0 reads an osc-mix input (iram companions 0x36/38/3a/3c),
+						// evolves 4 saturating one-pole states (iram 0x31-0x34) + an HPF
+						// (iram 0x1b-0x1e), and writes the filter output to gram 0xe8/0xec
+						// (the raw voice, before the asic0->...->asic3 output chain).
+						// Input companions, states and output are written+read within the
+						// SAME sample (constant iramPos), so a postSample snapshot is a
+						// per-sample-exact reference for them; the ladder/HPF coeffs are
+						// constant for a static patch (determined once). Layout: header
+						// then one int32 row/sample = iram0[0x10..0x4f] + gram[probes].
+						{
+							static const int kWinStart = 40000, kWinLen = 9216;
+							static const int kIramBase = 0x10, kIramCount = 64;
+							static const int kGram[8] = {0x21,0x23,0x75,0x77,0x79,0x7b,0xe8,0xec};
+							static const int kGramCount = 8;
+							static FILE* g_esp_tap = nullptr; static int g_esp_tap_init = 0; static long g_esp_tap_n = 0;
+							if (!g_esp_tap_init) { g_esp_tap_init = 1;
+								if (const char* td = getenv("ESP_TRANSPILE_DIR")) {
+									char path[512];
+									snprintf(path, sizeof(path), "%s/asic0.c", td); asic0.transpileTo(path);
+									snprintf(path, sizeof(path), "%s/asic1.c", td); asic1.transpileTo(path);
+									snprintf(path, sizeof(path), "%s/asic2.c", td); asic2.transpileTo(path);
+									snprintf(path, sizeof(path), "%s/asic3.c", td); asic3.transpileTo(path);
+								}
+								if (const char* p = getenv("ESP_TAP")) {
+									g_esp_tap = fopen(p, "wb");
+									if (g_esp_tap) {
+										int32_t hdr[24] = {0};
+										hdr[0] = 0x54505345; /* 'ESPT' LE */ hdr[1] = 3; /* asic0 core0 */
+										hdr[2] = kWinStart; hdr[3] = kWinLen;
+										hdr[4] = kIramBase; hdr[5] = kIramCount; hdr[6] = kGramCount;
+										for (int i = 0; i < kGramCount; i++) hdr[7 + i] = kGram[i];
+										fwrite(hdr, sizeof(hdr), 1, g_esp_tap);
+									}
+								}
+							}
+							if (g_esp_tap && g_esp_tap_n >= kWinStart && g_esp_tap_n < kWinStart + kWinLen) {
+								int32_t row[kIramCount + kGramCount];
+								for (int i = 0; i < kIramCount; i++) row[i] = asic3.readIRAM0(kIramBase + i);
+								for (int i = 0; i < kGramCount; i++) row[kIramCount + i] = asic3.readGRAM(kGram[i]);
+								fwrite(row, sizeof(row), 1, g_esp_tap);
+							}
+							g_esp_tap_n++;
+						}
+						// --- end ESP_TAP ---
 
 						for (int k = 0; k <= 0x4; k += 2) asic1.writeGRAM(asic0.readGRAM(0x80 + k), k);
 						for (int k = 0; k <= 0xa; k += 2) asic2.writeGRAM(asic1.readGRAM(0x80 + k), k);

@@ -32,6 +32,8 @@ public:
 	inline int32_t getPipelineRawFull() const { return hist[head]; }
 	
 	inline void storePipeline() { hist[head++] = acc; if (head == delay) head = 0; }
+	// ESP_TAP (REVERT): serialize the pipeline state for the bit-exact oracle.
+	void dumpAcc(int32_t* o) const { o[0]=acc; o[1]=hist[0]; o[2]=hist[1]; o[3]=hist[2]; o[4]=head; }
 protected:
 	static constexpr int delay {3}; // delay
 	int32_t acc {0}, hist[delay] = {}, head {0};
@@ -416,6 +418,17 @@ public:
 		accA.storePipeline();
 		accB.storePipeline();
 	}
+	// ESP_TAP (REVERT): serialize this core's full state for the bit-exact oracle.
+	// Layout (int32, 274 total): iram[256], iramPos, pc, pcjumpat, pcjumpto,
+	// skipfield, last_mulInputA_24, last_mulInputB_24, lastMul30, accA[5], accB[5].
+	static constexpr int kDumpCoreN = 256 + 8 + 5 + 5;
+	void dumpCore(int32_t* o) const {
+		for (int i = 0; i < 256; i++) o[i] = iram[i];
+		o[256] = (int32_t)iramPos; o[257] = (int32_t)pc;
+		o[258] = pcjumpat; o[259] = pcjumpto; o[260] = skipfield;
+		o[261] = last_mulInputA_24; o[262] = last_mulInputB_24; o[263] = lastMul30 ? 1 : 0;
+		accA.dumpAcc(o + 264); accB.dumpAcc(o + 269);
+	}
 protected:
 	static constexpr int64_t PRAM_SIZE = 768, IRAM_SIZE = 0x100, IRAM_MASK = IRAM_SIZE - 1;
 	void jumpto(uint16_t newpc) { if (pcjumpat != -1) printf("Oh no! Jump overlap!\n"); pcjumpto = newpc; pcjumpat = pc + 2;}
@@ -598,6 +611,34 @@ public:
 		transpile(f, true);
 		fprintf(f, "////////////////////////////////\n\n\n\n");
 		fclose(f);
+	}
+
+	// ESP_TAP helper (REVERT with je8086devices.h): dump this asic's core0 then
+	// core1 transpiled microcode to an explicit path, so the bit-exact port can
+	// follow the exact runtime instance (not the prior /tmp dump of unknown asic).
+	void transpileTo(const char *path) {
+		FILE *f = fopen(path, "w");
+		if (!f) return;
+		fprintf(f, "//////// core0 (intmem 0x0000) ////////\n");
+		transpile(f, false);
+		fprintf(f, "\n\n//////// core1 (intmem 0x1000) ////////\n");
+		transpile(f, true);
+		fclose(f);
+	}
+
+	// ESP_TAP (REVERT): dump a full DSP-state snapshot (iram+regs+acc per core,
+	// shared gram + mulcoeffs) for the bit-exact oracle. Layout (int32):
+	// core0[274], core1[274], gram[256], mulcoeffs[8]. ERAM is intentionally
+	// excluded (the voice filter block is eram-independent; verify via 0xe8).
+	static constexpr int kSnapN = 2 * ESPCore<lg2eram_size>::kDumpCoreN + 256 + 8;
+	void dumpSnapshot(FILE* f) const {
+		int32_t buf[kSnapN];
+		core0.dumpCore(buf);
+		core1.dumpCore(buf + ESPCore<lg2eram_size>::kDumpCoreN);
+		int off = 2 * ESPCore<lg2eram_size>::kDumpCoreN;
+		for (int i = 0; i < 256; i++) buf[off + i] = shared.gram[i];
+		for (int i = 0; i < 8; i++) buf[off + 256 + i] = shared.mulcoeffs[i];
+		fwrite(buf, sizeof(buf), 1, f);
 	}
 
 	void disassembleFirmware(const char *filename, const char *mode) {
