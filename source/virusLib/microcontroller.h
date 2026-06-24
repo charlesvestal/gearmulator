@@ -37,6 +37,15 @@ public:
 	bool requestMulti(BankNumber _bank, uint8_t _program, TPreset& _data);
 	bool requestSingle(BankNumber _bank, uint8_t _program, TPreset& _data);
 
+	// Move/schwung: lock-safe read of the current single-edit-buffer WITHOUT the
+	// receiveUpgradedPreset() side effect that requestSingle(EditBuffer) performs.
+	// requestSingle(EditBuffer) mutates the shared HDI08 TX parser, which races the
+	// audio thread's m_hdi08.exec() when called from the autosave refresh loop and
+	// can latch the preset-receive confirmation (stuck patch changes). This accessor
+	// only copies the cached buffer under the mutex, so the refresh never touches the
+	// parser. See virus_plugin.cpp child_handle_single_io().
+	bool peekSingleEditBuffer(TPreset& _data) const;
+
 	void sendInitControlCommands(uint8_t _masterVolume = 0xff);
 
 	void createDefaultState();
@@ -135,6 +144,11 @@ private:
 
 	mutable std::recursive_mutex m_mutex;
 	bool m_loadingState = false;
+
+	// Move/schwung: process() cycles a queued preset write has been stalled waiting for
+	// a preset-receive confirmation that never arrives; watchdog in process() gives up
+	// the wait once this passes a threshold. See process() for the full rationale.
+	uint32_t m_presetReceiveStall = 0;
 };
 
 }
