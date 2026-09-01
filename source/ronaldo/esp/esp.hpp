@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <assert.h>
 #include <array>
+#include <string.h>
 
 template <int32_t N> static constexpr int32_t se(int32_t x) { x <<= (32 - N); return x >> (32 - N); }
 
@@ -16,6 +17,34 @@ class ESPCore;
 
 template<int lg2eram_size>
 class ERAM;
+
+// ESP_IRAM_MIRROR: iram/gram are 512-entry buffers addressed as iramPos + mem with NO wrap. This lets
+// the ARM64 JIT rebase the ring pointer once per call and address every slot with an immediate offset.
+// Old-ring physical slot Q lives at Q+256 while Q < iramPos, else at Q; sync() moves the one slot
+// whose home changes when iramPos decrements. Host-side accessors must use the same (unmasked) index.
+#if defined(__aarch64__)
+#define ESP_IRAM_MIRROR 1
+#else
+#define ESP_IRAM_MIRROR 0
+#endif
+#define ESP_RAM_BUF_SIZE (ESP_IRAM_MIRROR ? 512 : 256)
+
+// Snapshot format is the 256-entry ring in its classic physical layout (slot Q holds logical
+// (Q - iramPos) & 0xff) whatever ESP_IRAM_MIRROR is, so files stay interchangeable across builds.
+static inline void espRingSave(FILE *f, const int32_t *buf, uint32_t iramPos)
+{
+	int32_t tmp[256];
+	for (uint32_t q = 0; q < 256; q++)
+		tmp[q] = (ESP_IRAM_MIRROR && q < iramPos) ? buf[q + 256] : buf[q];
+	fwrite(tmp, sizeof(tmp), 1, f);
+}
+static inline void espRingLoad(FILE *f, int32_t *buf)
+{
+	int32_t tmp[256];
+	fread(tmp, sizeof(tmp), 1, f);
+	memcpy(buf, tmp, sizeof(tmp));
+	if (ESP_IRAM_MIRROR) memcpy(buf + 256, tmp, sizeof(tmp));   // whole mirror consistent for any iramPos
+}
 
 #include "esp_opt.hpp"
 
@@ -158,7 +187,7 @@ protected:
 
 template<int lg2eram_size>
 struct SharedState {
-	int32_t gram[256] {};
+	int32_t gram[ESP_RAM_BUF_SIZE] {};
 	uint8_t readback_regs[4] = {0xff, 0xff, 0xff, 0x00};
 	int32_t mulcoeffs[8] = {};
 	ERAM<lg2eram_size> eram;
@@ -170,14 +199,14 @@ struct SharedState {
 		eram.reset();
 	}
 
-	bool saveState(FILE *f) const {
-		fwrite(gram, sizeof(gram), 1, f);
+	bool saveState(FILE *f, uint32_t iramPos) const {
+		espRingSave(f, gram, iramPos);
 		fwrite(readback_regs, sizeof(readback_regs), 1, f);
 		fwrite(mulcoeffs, sizeof(mulcoeffs), 1, f);
 		return eram.saveState(f);
 	}
 	bool loadState(FILE *f) {
-		fread(gram, sizeof(gram), 1, f);
+		espRingLoad(f, gram);
 		fread(readback_regs, sizeof(readback_regs), 1, f);
 		fread(mulcoeffs, sizeof(mulcoeffs), 1, f);
 		return eram.loadState(f);
@@ -194,19 +223,35 @@ public:
 
 	void setup(const uint32_t *_pram, SharedState<lg2eram_size> *_shared) { pram = _pram; shared = _shared; }
 
-	void writeGRAM(int32_t val, uint32_t offset) {shared->gram[(offset + iramPos) & IRAM_MASK] = val;}
-	int32_t readGRAM(uint32_t offset) const {return shared->gram[(offset + iramPos) & IRAM_MASK];}
+	inline uint32_t ramIdx(uint32_t offset) const
+	{
+		return ESP_IRAM_MIRROR ? (offset & IRAM_MASK) + iramPos : (offset + iramPos) & IRAM_MASK;
+	}
 
-	void writeIRAM(int32_t val, uint32_t offset) { iram[(offset + iramPos) & IRAM_MASK] = val; }
-	int32_t readIRAM(uint32_t offset) const {return iram[(offset + iramPos) & IRAM_MASK];}
+	// Called after iramPos has been decremented to newPos (see ESP_IRAM_MIRROR).
+	static inline void mirrorFixup(int32_t* buf, uint32_t newPos)
+	{
+		if (!ESP_IRAM_MIRROR) return;
+		if (newPos == IRAM_MASK) memcpy(&buf[IRAM_SIZE], &buf[0], (IRAM_SIZE - 1) * sizeof(int32_t));
+		else buf[newPos] = buf[newPos + IRAM_SIZE];
+	}
+
+	void writeGRAM(int32_t val, uint32_t offset) {shared->gram[ramIdx(offset)] = val;}
+	int32_t readGRAM(uint32_t offset) const {return shared->gram[ramIdx(offset)];}
+
+	void writeIRAM(int32_t val, uint32_t offset) { iram[ramIdx(offset)] = val; }
+	int32_t readIRAM(uint32_t offset) const {return iram[ramIdx(offset)];}
 
 	void sync() {
 		pc = 0;
 		iramPos = (iramPos - 1) & IRAM_MASK;
+		mirrorFixup(iram, iramPos);
 	}
+	void syncShared() { mirrorFixup(shared->gram, iramPos); }
+	uint32_t getIramPos() const { return iramPos; }
 
 	bool saveState(FILE *f) const {
-		fwrite(iram, sizeof(iram), 1, f);
+		espRingSave(f, iram, iramPos);
 		fwrite(&pc, sizeof(pc), 1, f);
 		fwrite(&iramPos, sizeof(iramPos), 1, f);
 		fwrite(&pcjumpat, sizeof(pcjumpat), 1, f);
@@ -220,7 +265,7 @@ public:
 		return true;
 	}
 	bool loadState(FILE *f) {
-		fread(iram, sizeof(iram), 1, f);
+		espRingLoad(f, iram);
 		fread(&pc, sizeof(pc), 1, f);
 		fread(&iramPos, sizeof(iramPos), 1, f);
 		fread(&pcjumpat, sizeof(pcjumpat), 1, f);
@@ -255,7 +300,7 @@ public:
 		uint8_t shift = (0x3567 >> (shiftbits << 2)) & 0xf; // this is shift amount. pick the value 3/5/6/7 using bits 8,9.
 		const uint8_t coef = instr & 0xff;
 
-		const uint32_t mempos = ((uint32_t)mem + iramPos) & IRAM_MASK;
+		const uint32_t mempos = ramIdx(mem);
 		int32_t mulInputA_24 = 0;
 		switch (mem)
 		{
@@ -420,7 +465,7 @@ protected:
 	static constexpr int64_t PRAM_SIZE = 768, IRAM_SIZE = 0x100, IRAM_MASK = IRAM_SIZE - 1;
 	void jumpto(uint16_t newpc) { if (pcjumpat != -1) printf("Oh no! Jump overlap!\n"); pcjumpto = newpc; pcjumpat = pc + 2;}
 
-	int32_t iram[IRAM_SIZE] {}, last_mulInputA_24 {0}, last_mulInputB_24 {0}, skipfield {0};
+	int32_t iram[ESP_RAM_BUF_SIZE] {}, last_mulInputA_24 {0}, last_mulInputB_24 {0}, skipfield {0};
 	bool lastMul30 = false;
 	const uint32_t *pram {nullptr};
 	uint32_t pc = 0, iramPos = 0;
@@ -464,7 +509,7 @@ public:
 	void writePMem32(uint16_t address, uint32_t val, bool _recompile = true) {((uint32_t*)&intmem[0])[address] = val;} // addresses are /4 here
 	uint32_t readHostReg() const {return *(uint32_t *)&shared.readback_regs[0];}
 	void step_cores() { core1.steperam(); core1.step(); core0.step();}
-	void sync_cores() {core0.sync(); core1.sync(); if (lg2eram_size) shared.eram.tickSample();}
+	void sync_cores() {core0.sync(); core1.sync(); core0.syncShared(); if (lg2eram_size) shared.eram.tickSample();}
 
 	uint8_t readuC(uint32_t address) { return shared.readback_regs[address & 3]; }
 	void getReadbackRegs(uint8_t *out) const { memcpy(out, shared.readback_regs, 4); }
@@ -506,6 +551,11 @@ public:
 			pmem[addr + 1] |= (program_writing_word[2] & 0xf) << 6;
 
 			// opt.genProgram(this);
+#ifdef JE_PROFILE
+			{ extern struct JeProfile je_prof; je_prof.coefWrites++; }
+#endif
+			// Full recompute on purpose: a 0x54 program write is recompiled 3 samples later, and this
+			// refresh picks its coef/shift up meanwhile. ~0.06 writes/sample, so a ranged update buys nothing.
 			opt.updateCoef(this);
 		}
 		else if (if_mode == 0x56 && (address & 3) == 3) {
@@ -566,7 +616,7 @@ public:
 		fwrite(program_writing_word, sizeof(program_writing_word), 1, f);
 		if (!core0.saveState(f)) return false;
 		if (!core1.saveState(f)) return false;
-		if (!shared.saveState(f)) return false;
+		if (!shared.saveState(f, core0.getIramPos())) return false;
 		return true;
 	}
 	bool loadState(FILE *f) {

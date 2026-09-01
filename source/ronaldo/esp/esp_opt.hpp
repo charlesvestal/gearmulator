@@ -5,6 +5,9 @@
 #include "esp_jit_x64.h"
 #include "esp_jit_arm64.h"
 #include "esp_jit_types.h"
+#ifdef JE_PROFILE
+#include "../je8086/jeLib/je_profile.h"
+#endif
 
 constexpr int PRAM_SIZE = 768;
 
@@ -20,6 +23,9 @@ struct CoreData {
   int32_t mulcoeffs[8];
   int8_t coefs[PRAM_SIZE];
   int8_t shiftAmounts[PRAM_SIZE];
+  // coef << (7 - shiftAmount): (A*coef) >> shiftAmount == (A*coefShifted) >> 7 exactly, so a plain
+  // MAC needs one load and an immediate shift. shiftAmount is one of 3,5,6,7 -> fits int16.
+  int16_t coefsShifted[PRAM_SIZE];
 };
 
 enum { kNone = 0, kSavesA = 1, kSavesB = 2 };
@@ -204,6 +210,16 @@ public:
     coreEmitter1.init(esp, &esp->core1);
 
     updateCoef(esp);
+#ifdef JE_PROFILE
+    {
+      extern struct JeProfile je_prof;
+      if (m_profAsic < 0) m_profAsic = je_prof.nextAsic++ & 3;
+      coreEmitter0.profAsic = coreEmitter1.profAsic = m_profAsic;
+      coreEmitter0.profCore = 0; coreEmitter1.profCore = 1;
+      je_prof.emitted[m_profAsic][0] = je_prof.emitted[m_profAsic][1] = 0;
+      je_prof.macs[m_profAsic][0] = je_prof.macs[m_profAsic][1] = 0;
+    }
+#endif
 
     // logger.log("#### CORE 0 ####\n");
     genCore(esp, 0, &coreEmitter0, &runCore0);
@@ -230,30 +246,25 @@ public:
 	  }
   }
 
+  static void updateCoefEntry(CoreData& data, const uint32_t* pram, size_t i)
+  {
+    uint32_t instr = pram[i];
+    uint32_t op = (instr >> 16) & 0x7c;
+    int8_t coef = se<8>(instr & 0xff);
+    uint32_t shift = (instr >> 8) & 3;
+    uint32_t shiftAmount = (0x3567 >> (shift << 2)) & 0xf;
+    if (op == 0x20 || op == 0x24) shiftAmount = (shift & 1) ? 6 : 7;
+    data.coefs[i] = coef;
+    data.shiftAmounts[i] = shiftAmount;
+    data.coefsShifted[i] = static_cast<int16_t>(static_cast<int32_t>(coef) << (7 - shiftAmount));
+  }
+
+  // Recompute every entry of both cores (after a program write / recompile).
   void updateCoef(ESP<lg2eram_size>* esp)
   {
     ++g_esp_updatecoef_count;
-    for (size_t i = 0; i < PRAM_SIZE; i++) {
-      uint32_t instr = esp->core0.pram[i];
-      uint32_t op = (instr >> 16) & 0x7c;
-      int8_t coef = se<8>(instr & 0xff);
-      uint32_t shift = (instr >> 8) & 3;
-      uint32_t shiftAmount = (0x3567 >> (shift << 2)) & 0xf;
-      if (op == 0x20 || op == 0x24) shiftAmount = (shift & 1) ? 6 : 7;
-      data_core0.coefs[i] = coef;
-      data_core0.shiftAmounts[i] = shiftAmount;
-    }
-
-    for (size_t i = 0; i < PRAM_SIZE; i++) {
-      uint32_t instr = esp->core1.pram[i];
-      uint32_t op = (instr >> 16) & 0x7c;
-      int8_t coef = se<8>(instr & 0xff);
-      uint32_t shift = (instr >> 8) & 3;
-      uint32_t shiftAmount = (0x3567 >> (shift << 2)) & 0xf;
-      if (op == 0x20 || op == 0x24) shiftAmount = (shift & 1) ? 6 : 7;
-      data_core1.coefs[i] = coef;
-      data_core1.shiftAmounts[i] = shiftAmount;
-    }
+    for (size_t i = 0; i < PRAM_SIZE; i++) updateCoefEntry(data_core0, esp->core0.pram, i);
+    for (size_t i = 0; i < PRAM_SIZE; i++) updateCoefEntry(data_core1, esp->core1.pram, i);
   }
 
   inline void callOptimized(ESP<lg2eram_size>* esp)
@@ -269,6 +280,9 @@ private:
   asmjit::JitRuntime m_rt;
   asmjit::FileLogger logger;
   uint32_t m_programDirty = 0;
+#ifdef JE_PROFILE
+  int m_profAsic = -1;
+#endif
   
   typedef void(*RunCore)(int8_t* coefsPtr, int32_t *iramPtr, int32_t *gramPtr, CoreData *varPtr, uint32_t eramPos, uint32_t iramPos, int64_t unused1, int64_t unused2);
   RunCore runCore0 = nullptr, runCore1 = nullptr;
@@ -329,6 +343,12 @@ private:
 	jit.jitExit();
 
     m_asm.finalize();
+#ifdef JE_PROFILE
+    {
+      extern struct JeProfile je_prof;
+      je_prof.codeBytes[m_profAsic][core] = (uint32_t)code.codeSize();
+    }
+#endif
     
     const auto err = m_rt.add(dest, &code);
     if (err)
@@ -454,7 +474,22 @@ private:
 
     	if (instr.opType == kNop) return;
 
-		_jit.emitOp(pc, instr, lastMul30);
+#ifdef JE_PROFILE
+		{
+			extern struct JeProfile je_prof;
+			je_prof.emitted[profAsic][profCore]++;
+			if (!instr.m_access.nomac && instr.m_access.srcReg != -1 && instr.m_access.destReg != -1) je_prof.macs[profAsic][profCore]++;
+		}
+#endif
+		bool nextIsDmac = false;
+		for (int i = pc + 1; i < PRAM_SIZE; i++)
+		{
+			if (pram_opt[i].opType == kNop) continue;
+			nextIsDmac = pram_opt[i].opType == kDMAC;
+			break;
+		}
+
+		_jit.emitOp(pc, instr, lastMul30, nextIsDmac);
 
 		lastMul30 = (instr.op == 0x30);
     }
@@ -474,6 +509,9 @@ private:
     }
   
     bool lastMul30 = false;
+#ifdef JE_PROFILE
+    int profAsic = 0, profCore = 0;
+#endif
 
 		void pre_optimize()
 		{
