@@ -305,7 +305,10 @@ public:
 				txr = value;
 				if (value != 0xfe)
 				{
-					printf("MIDI Out: [%02x]\n", value & 255);
+					/* No printf here: this is the H8S serial write path, reached
+					 * from je->step() on the render thread. It cost a syscall per
+					 * MIDI byte and it corrupted stdout for anything reading the
+					 * plugin's parameter output. */
 					outputCallback(static_cast<uint8_t>(value & 255));
 				}
 				txrtimer = clocktime;
@@ -390,7 +393,7 @@ public:
 		Serial::write(address, value);
 		if (address == 3 && value != 0xfe)
 		{
-			printf("MIDI Out: [%02x]\n", value & 255);
+			/* see above: no I/O on the render path */
 			outputCallback(static_cast<uint8_t>(value & 255));
 		}
 	}
