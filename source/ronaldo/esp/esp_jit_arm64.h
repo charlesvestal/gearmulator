@@ -2,14 +2,14 @@
 
 #include "esp_jit.h"
 
-#include "asmjit/arm/a64builder.h"
+#include "asmjit/arm/a64assembler.h"
 
 namespace esp
 {
 	class EspJitArm64 : public EspJitBase
 	{
 	public:
-		using Asm = asmjit::a64::Builder;
+		using Asm = asmjit::a64::Assembler;
 
 		EspJitArm64(Asm& a, const JitInputData& _data);
 

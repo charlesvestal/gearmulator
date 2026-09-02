@@ -535,7 +535,7 @@ public:
 			auto newValue = *reinterpret_cast<uint32_t*>(&intmem[(addr << 2)]);
 
 			if (newValue != oldValue)
-				opt.setProgramDirty();
+				opt.setProgramDirty(addr < 0x400 ? 1 : 2);	// core 0 owns words 0..0x3ff, core 1 the rest
 		}
 		else if (if_mode == 0x55 && (address & 3) == 3) {
 			const int addr = address >> 2;
@@ -594,7 +594,7 @@ public:
 			};
 
 			if (newValues != oldValues)
-				opt.setProgramDirty();
+				opt.setProgramDirty((addr < 0x400 ? 1 : 0) | (addr + 4 >= 0x400 ? 2 : 0));
 		}
 		else if (if_mode == 0x57 && (address & 3) == 3) {
 			addr_sel = address & ~3;

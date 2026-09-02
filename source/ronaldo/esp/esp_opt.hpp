@@ -1,3 +1,7 @@
+#include <unistd.h>
+#include <time.h>
+#include <cstdlib>
+#include <cstdio>
 #include <asmjit/asmjit.h>
 #include <asmjit/a64.h>
 #include <sstream>
@@ -199,15 +203,20 @@ public:
     data_core1.eramPtr = &esp->shared.eram.eram[0];
   }
 
-  void genProgram(ESP<lg2eram_size>* esp)
+  /* `cores` is a bit mask: 1 = core 0, 2 = core 1. A core's generated code
+   * depends only on its own program words (the ERAM decode reads core 1's),
+   * so a write burst that touched one core recompiles one core. The H8S
+   * loads a patch in ~60 bursts per ASIC, each one a full recompile at
+   * ~1 ms on the device, and that is the stall at patch change. */
+  void genProgram(ESP<lg2eram_size>* esp, uint32_t cores = 3)
   {
     ++g_esp_genprogram_count;
-    if (runCore0) m_rt.release(runCore0);
-    if (runCore1) m_rt.release(runCore1);
+    if ((cores & 1) && runCore0) m_rt.release(runCore0);
+    if ((cores & 2) && runCore1) m_rt.release(runCore1);
 
-    eramEmitter.init(esp);
-    coreEmitter0.init(esp, &esp->core0);
-    coreEmitter1.init(esp, &esp->core1);
+    if (cores & 2) eramEmitter.init(esp);
+    if (cores & 1) coreEmitter0.init(esp, &esp->core0);
+    if (cores & 2) coreEmitter1.init(esp, &esp->core1);
 
     updateCoef(esp);
 #ifdef JE_PROFILE
@@ -221,30 +230,47 @@ public:
     }
 #endif
 
+    struct timespec _t0; clock_gettime(CLOCK_MONOTONIC, &_t0);
     // logger.log("#### CORE 0 ####\n");
-    genCore(esp, 0, &coreEmitter0, &runCore0);
+    if (cores & 1) genCore(esp, 0, &coreEmitter0, &runCore0);
     
     // logger.log("\n\n\n#### CORE 1 ####\n");
-    genCore(esp, 1, &coreEmitter1, &runCore1, true);
+    if (cores & 2) genCore(esp, 1, &coreEmitter1, &runCore1, true);
+    if (getenv("JE_GENLOG")) {
+      struct timespec _t1; clock_gettime(CLOCK_MONOTONIC, &_t1);
+      fprintf(stderr, "[genProgram pid=%d] cores=%u %.2f ms (#%llu)\n", (int)getpid(), cores,
+              ((_t1.tv_sec-_t0.tv_sec)*1e9 + (_t1.tv_nsec-_t0.tv_nsec))/1e6, (unsigned long long)g_esp_genprogram_count);
+    }
 
     // fflush(logger._file);
     // printf("JITed ESP cores\n");
   }
   
-  void setProgramDirty()
+  void setProgramDirty(uint32_t cores = 3)
   {
 	  ++g_esp_dirty_count;
+	  if (!m_programDirty) m_firstDirty = m_sampleClock;
+	  ++m_dirtyWrites;
+	  m_dirtyCores |= cores;
 	  m_programDirty = 3;
   }
 
+  uint64_t m_sampleClock = 0;
   void genProgramIfDirty()
   {
+      ++m_sampleClock;
       if (m_programDirty > 0)
       {
-          if (--m_programDirty == 0)
-              genProgram(m_esp);
+          if (--m_programDirty == 0) {
+              if (getenv("JE_GENLOG")) fprintf(stderr, "[gen pid=%d this=%p] at sample %llu, first dirty at %llu, %u writes\n", (int)getpid(), (void*)this, (unsigned long long)m_sampleClock, (unsigned long long)m_firstDirty, m_dirtyWrites);
+              m_dirtyWrites = 0;
+              const uint32_t cores = m_dirtyCores;
+              m_dirtyCores = 0;
+              genProgram(m_esp, cores);
+          }
 	  }
   }
+  uint64_t m_firstDirty = 0; uint32_t m_dirtyWrites = 0;
 
   static void updateCoefEntry(CoreData& data, const uint32_t* pram, size_t i)
   {
@@ -280,6 +306,7 @@ private:
   asmjit::JitRuntime m_rt;
   asmjit::FileLogger logger;
   uint32_t m_programDirty = 0;
+  uint32_t m_dirtyCores = 0;
 #ifdef JE_PROFILE
   int m_profAsic = -1;
 #endif
@@ -328,6 +355,7 @@ private:
     // m_asm.addDiagnosticOptions(asmjit::DiagnosticOptions::kValidateAssembler);
     // m_asm.addDiagnosticOptions(asmjit::DiagnosticOptions::kValidateIntermediate);
 
+	struct timespec _g0, _g1, _g2, _g3; clock_gettime(CLOCK_MONOTONIC, &_g0);
 	jit.jitEnter();
 
     for (size_t pc = 0; pc < PRAM_SIZE; pc++)
@@ -341,8 +369,12 @@ private:
     emitter->emitEnd(m_asm);
 
 	jit.jitExit();
+	clock_gettime(CLOCK_MONOTONIC, &_g1);
 
+#if JIT_X64
     m_asm.finalize();
+#endif
+	clock_gettime(CLOCK_MONOTONIC, &_g2);
 #ifdef JE_PROFILE
     {
       extern struct JeProfile je_prof;
@@ -351,6 +383,11 @@ private:
 #endif
     
     const auto err = m_rt.add(dest, &code);
+	clock_gettime(CLOCK_MONOTONIC, &_g3);
+	if (getenv("JE_GENLOG")) {
+		auto ms = [](const timespec& a, const timespec& b){ return ((b.tv_sec-a.tv_sec)*1e9 + (b.tv_nsec-a.tv_nsec))/1e6; };
+		fprintf(stderr, "[genCore %u] emit %.3f finalize %.3f add %.3f ms, %zu bytes\n", core, ms(_g0,_g1), ms(_g1,_g2), ms(_g2,_g3), code.codeSize());
+	}
     if (err)
     {
       const auto* const errString = asmjit::DebugUtils::errorAsString(err);

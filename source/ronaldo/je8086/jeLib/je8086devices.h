@@ -117,8 +117,17 @@ namespace jeLib
 		 * Must be set before the fork; only 1 and 2 are supported (the 2->3 handoff
 		 * carries 10 words, more than the ring payload). */
 		inline int g_je_split_asic = 2;
-		/* Words handed from ASIC n to ASIC n+1 at GRAM 0x80.. (dest 0..), per boundary. */
+		/* Pipeline stage owned by THIS process: ASICs [lo, hi). The parent is
+		 * [0, g_je_split_asic); a child stage may be any contiguous run above it,
+		 * so a 3-stage {0}/{1}/{2,3} pipeline is the 2-stage code with different
+		 * bounds. Process-local after fork. */
+		inline int g_je_stage_lo = 0;
+		inline int g_je_stage_hi = 4;
+		/* Words handed from ASIC n to ASIC n+1 at GRAM 0x80.. (dest 0..), per boundary.
+		 * The 2->3 boundary also carries 0xa0/0xa2 -> 0x20/0x22, packed as words 8, 9
+		 * of the handoff payload (JE_HANDOFF_MAX). */
 		inline constexpr int g_je_handoff_words[3] = {3, 6, 8};
+		inline constexpr int JE_HANDOFF_MAX = 10;
 		/* Mode 1: called per sample with ASIC(split-1)'s handoff values
 		 * (g_je_handoff_words[split-1] of them). */
 		inline std::function<void(const int32_t*)> g_je_gram_produce;
@@ -134,7 +143,7 @@ namespace jeLib
 		 * H8S↔ESP boundary for native-DSP feasibility analysis. */
 		inline std::function<void(int asic, uint32_t addr, uint8_t val)> g_je_uc_write_capture;
 		/* Diagnostic: fires on every H8S<-ASIC readback register read. */
-		inline std::function<void(int asic, uint32_t addr)> g_je_uc_read_capture;
+		inline std::function<void(int asic, uint32_t addr, uint8_t value)> g_je_uc_read_capture;
 
 		class MultiAsic : public H8SDevice
 		{
@@ -143,7 +152,7 @@ namespace jeLib
 
 			/* Apply a forwarded uC write to a child-owned ASIC (child process) */
 			void applyUcWrite(int asic, uint32_t addr, uint8_t val) {
-				if (asic < g_je_split_asic) return;
+				if (asic < g_je_stage_lo || asic >= g_je_stage_hi) return;
 				forAsic(asic, [&](auto& a) { a.writeuC(addr, val); });
 			}
 
@@ -176,11 +185,13 @@ namespace jeLib
 			void readHandoff(int from, int32_t *gram) {
 				forAsic(from, [&](auto& src) {
 					for (int k = 0; k < g_je_handoff_words[from]; k++) gram[k] = src.readGRAM(0x80 + k * 2);
+					if (from == 2) { gram[8] = src.readGRAM(0xa0); gram[9] = src.readGRAM(0xa2); }
 				});
 			}
 			void writeHandoff(int to, const int32_t *gram) {
 				forAsic(to, [&](auto& dst) {
 					for (int k = 0; k < g_je_handoff_words[to - 1]; k++) dst.writeGRAM(gram[k], k * 2);
+					if (to == 3) { dst.writeGRAM(gram[8], 0x20); dst.writeGRAM(gram[9], 0x22); }
 				});
 			}
 			void runAsics(int first, int last) {
@@ -204,25 +215,32 @@ namespace jeLib
 			 * exactly like the serial path where handoff follows the run. */
 			bool processSampleAsic23() { return processSampleChild(); }
 			bool processSampleChild() {
-				const int split = g_je_split_asic;
-				// 1. Run the child's ASICs with existing GRAM (from previous iteration or snapshot)
-				runAsics(split, 4);
+				const int lo = g_je_stage_lo, hi = g_je_stage_hi;
+				// 1. Run this stage's ASICs with existing GRAM (from previous iteration or snapshot)
+				runAsics(lo, hi);
 
-				// 2. Audio output (before handoffs, matching serial mode)
-				postSample(asic3.readGRAM(0xe8), asic3.readGRAM(0xec));
-
-				// 3. Consume new GRAM from parent (the split-1 -> split handoff)
-				if (g_je_gram_consume) {
-					int32_t gram[8];
-					if (!g_je_gram_consume(gram)) return false;
-					writeHandoff(split, gram);
+				// 2. Output: audio if this stage holds ASIC3, else the handoff to the
+				//    next stage — read PRE-sync, same point as the parent's produce.
+				if (hi == 4) {
+					postSample(asic3.readGRAM(0xe8), asic3.readGRAM(0xec));
+				} else if (g_je_gram_produce) {
+					int32_t gram[JE_HANDOFF_MAX];
+					readHandoff(hi - 1, gram);
+					g_je_gram_produce(gram);
 				}
 
-				// 4. Remaining handoffs inside the child (for next sample)
-				for (int b = split; b < 3; b++) handoff(b);
+				// 3. Consume new GRAM from the previous stage (the lo-1 -> lo handoff)
+				if (g_je_gram_consume) {
+					int32_t gram[JE_HANDOFF_MAX];
+					if (!g_je_gram_consume(gram)) return false;
+					writeHandoff(lo, gram);
+				}
+
+				// 4. Remaining handoffs inside this stage (for next sample)
+				for (int b = lo; b < hi - 1; b++) handoff(b);
 
 				// 5. sync_cores
-				syncAsics(split, 4);
+				syncAsics(lo, hi);
 				return true;
 			}
 
@@ -257,11 +275,10 @@ namespace jeLib
 			uint8_t read(uint32_t _address) override
 			{
 				const int asic = (_address >> 14) & 3; _address &= 0x3fff;
-				if (g_je_uc_read_capture) g_je_uc_read_capture(asic, _address);
-				if (asic == 0) return asic0.readuC(_address);
-				if (asic == 1) return asic1.readuC(_address);
-				if (asic == 2) return asic2.readuC(_address);
-				return asic3.readuC(_address);
+				uint8_t v = 0;
+				forAsic(asic, [&](auto& a) { v = a.readuC(_address); });
+				if (g_je_uc_read_capture) g_je_uc_read_capture(asic, _address, v);
+				return v;
 			}
 
 			void write(uint32_t _address, uint8_t _value) override
@@ -269,15 +286,22 @@ namespace jeLib
 				const int asic = (_address >> 14) & 3; _address &= 0x3fff;
 				if (g_je_uc_write_capture)
 					g_je_uc_write_capture(asic, _address, _value);
+				// In parallel mode the parent owns [0, split) only; a write to a
+				// child-owned ASIC is forwarded, not applied to the parent's stale copy.
+				if (g_je_parallel_mode == 1 && asic >= g_je_split_asic) {
+					if (g_je_uc_write_forward) g_je_uc_write_forward(asic, _address, _value);
+					return;
+				}
 				forAsic(asic, [&](auto& a) { a.writeuC(_address, _value); });
-				if (asic >= g_je_split_asic && g_je_parallel_mode == 1 && g_je_uc_write_forward)
-					g_je_uc_write_forward(asic, _address, _value);
 			}
 			
 			void runForCycles(uint64_t cycles) {
 				uint64_t diff = cycles + cyclesResidual - lastCycles;
 				lastCycles = cycles;
 
+				/* Called once per H8S instruction; a sample boundary is crossed on
+				 * one call in ~40, so skip the div/mod (and the loop) otherwise. */
+				if (diff < (768/2)) { cyclesResidual = diff; return; }
 				uint64_t samples = diff / (768/2);
 				cyclesResidual = diff % (768/2);
 
@@ -323,7 +347,7 @@ namespace jeLib
 						for (int b = 0; b < split - 1; b++) handoff(b);
 						// Read the last parent ASIC's outputs PRE-sync (same point as serial mode 0)
 						if (g_je_gram_produce) {
-							int32_t gram[8];
+							int32_t gram[JE_HANDOFF_MAX];
 							readHandoff(split - 1, gram);
 							g_je_gram_produce(gram);
 						}
@@ -336,7 +360,7 @@ namespace jeLib
 						// paths, which call processSampleChild directly).
 						const int split = g_je_split_asic;
 						if (g_je_gram_consume) {
-							int32_t gram[8];
+							int32_t gram[JE_HANDOFF_MAX];
 							if (!g_je_gram_consume(gram)) break;
 							writeHandoff(split, gram);
 						}
