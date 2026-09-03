@@ -29,16 +29,32 @@ namespace jeLib
 #endif
 		}
 
-		/* Spin, then yield. The stages are sample-locked and a boundary is only
-		 * ever a few samples apart, so sleeping here costs more than it saves --
-		 * but a bare spin burns a core, so hint the CPU on every turn. */
+		/* The stages are sample-locked and never more than a few samples apart, so
+		 * the wait is short and sleeping costs more than it saves. Hint the core
+		 * instead: sched_yield() here is a SYSCALL per turn and four stages
+		 * spinning on it dominated the run -- it cost more than half the
+		 * pipeline's speedup. Fall back to a real yield only after a long wait,
+		 * which in practice means a stall rather than a handoff. */
+		inline void cpuRelax()
+		{
+#if defined(__aarch64__) || defined(__arm__)
+			__asm__ __volatile__("yield" ::: "memory");
+#elif defined(__x86_64__) || defined(__i386__)
+			__asm__ __volatile__("pause" ::: "memory");
+#endif
+		}
+
 		template<typename Pred, typename Stop>
 		inline bool spinWait(Pred _pred, Stop _stop)
 		{
+			uint32_t spins = 0;
 			while (!_pred())
 			{
 				if (_stop()) return false;
-				std::this_thread::yield();
+				if (++spins < 2048)
+					cpuRelax();
+				else
+					std::this_thread::yield();
 			}
 			return true;
 		}
