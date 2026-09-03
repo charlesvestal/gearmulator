@@ -75,6 +75,20 @@ namespace jeLib
 		 * stages overlap but inject MIDI up to `window` samples off. */
 		void pump(const std::function<void(int32_t, int32_t)>& _sink, int64_t _window);
 
+		/* Hand the caller exactly one sample for every sample it has rendered,
+		 * taking audio that is a CONSTANT _latency samples old: silence until the
+		 * pipeline has filled, the real stream after that, waiting when a sample
+		 * has not arrived yet.
+		 *
+		 * That constant is what makes the mode exact and reproducible. A window
+		 * bounds how far the H8S may lead, but how far it ACTUALLY gets still
+		 * depends on thread timing, so the emulator covers a different span of
+		 * emulated time each run and MIDI lands in different places. Here the
+		 * count delivered is tied to the count rendered and nothing else, so the
+		 * H8S sees precisely the serial timeline while the stages stay _latency
+		 * samples behind and overlap freely. */
+		void deliver(const std::function<void(int32_t, int32_t)>& _sink, int64_t _latency);
+
 		int64_t inFlight() const;
 
 		/* Readbacks of ASICs this thread does not own, refreshed for the H8S. */

@@ -113,7 +113,7 @@ namespace jeLib
 			 * here: the sample buffer and the MIDI rate limiter behind it belong
 			 * to this thread. */
 			m_pipeline->refreshParentReadbacks();
-			m_pipeline->pump([this](const int32_t _l, const int32_t _r) { onReceiveSample(_l, _r); }, m_pipelineWindow);
+			m_pipeline->deliver([this](const int32_t _l, const int32_t _r) { onReceiveSample(_l, _r); }, m_pipelineWindow);
 		}
 	}
 

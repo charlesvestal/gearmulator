@@ -74,6 +74,7 @@ namespace jeLib
 		uint8_t readback[4][4] = {};
 
 		std::atomic<int64_t> drained{0};
+		int64_t delivered = 0;	// caller's thread only
 
 		static int avail(const std::atomic<int>& _w, const std::atomic<int>& _r)
 		{
@@ -320,6 +321,32 @@ namespace jeLib
 			              [&] { return impl.shutdown.load(std::memory_order_relaxed); }))
 				return;
 			drainAudio(_sink);
+		}
+	}
+
+	void JePipeline::deliver(const std::function<void(int32_t, int32_t)>& _sink, const int64_t _latency)
+	{
+		auto& impl = *m_impl;
+		const int64_t produced = impl.stage[0].samplesProduced.load(std::memory_order_acquire);
+
+		while (impl.delivered < produced)
+		{
+			if (impl.delivered < _latency)
+			{
+				_sink(0, 0);	// pipeline still filling
+			}
+			else
+			{
+				if (!spinWait([&] { return Impl::avail(impl.audioWrite, impl.audioRead) > 0; },
+				              [&] { return impl.shutdown.load(std::memory_order_relaxed); }))
+					return;
+				const int ri = impl.audioRead.load(std::memory_order_relaxed) & RingMask;
+				_sink(impl.audioRing[ri].left, impl.audioRing[ri].right);
+				impl.audioRead.store((impl.audioRead.load(std::memory_order_relaxed) + 1) % (RingCapacity * 2),
+				                     std::memory_order_release);
+				impl.drained.fetch_add(1, std::memory_order_relaxed);
+			}
+			++impl.delivered;
 		}
 	}
 
