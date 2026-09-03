@@ -154,6 +154,13 @@ namespace jeLib
 		 * of parallel mode. Used by spike_protocol to characterize the
 		 * H8S↔ESP boundary for native-DSP feasibility analysis. */
 		inline std::function<void(int asic, uint32_t addr, uint8_t val)> g_je_uc_write_capture;
+		/* Diagnostic: fires wherever real audio leaves ASIC3, in EVERY mode --
+		 * serial, fork parent+child and threaded stage. One tap point makes
+		 * serial and pipeline output directly comparable; without it the serial
+		 * bench dumps Device floats and the pipeline dumps raw GRAM ints, which
+		 * cannot be hashed against each other. Only the ASIC3 owner calls it. */
+		inline std::function<void(int32_t, int32_t)> g_je_audio_tap;
+
 		/* Diagnostic: fires on every H8S<-ASIC readback register read. */
 		inline std::function<void(int asic, uint32_t addr, uint8_t value)> g_je_uc_read_capture;
 
@@ -161,6 +168,11 @@ namespace jeLib
 		{
 		public:
 			void setPostSample(const std::function<void(int32_t, int32_t)>& _postSample) { postSample = _postSample; }
+			/* Real audio out: tap first, then the normal sink. */
+			void emitAudio(int32_t _l, int32_t _r) {
+				if (g_je_audio_tap) g_je_audio_tap(_l, _r);
+				postSample(_l, _r);
+			}
 
 			/* Apply a forwarded uC write to a child-owned ASIC (child process) */
 			void applyUcWrite(int asic, uint32_t addr, uint8_t val) {
@@ -234,8 +246,10 @@ namespace jeLib
 				// 2. Output: audio if this stage holds ASIC3, else the handoff to the
 				//    next stage — read PRE-sync, same point as the parent's produce.
 				if (hi == 4) {
-					if (g_je_stage_audio_out) g_je_stage_audio_out(asic3.readGRAM(0xe8), asic3.readGRAM(0xec));
-					else postSample(asic3.readGRAM(0xe8), asic3.readGRAM(0xec));
+					const int32_t l = asic3.readGRAM(0xe8), r = asic3.readGRAM(0xec);
+					if (g_je_audio_tap) g_je_audio_tap(l, r);
+					if (g_je_stage_audio_out) g_je_stage_audio_out(l, r);
+					else postSample(l, r);
 				} else if (g_je_gram_produce) {
 					int32_t gram[JE_HANDOFF_MAX];
 					readHandoff(hi - 1, gram);
@@ -335,7 +349,7 @@ namespace jeLib
 						asic2.opt.callOptimized(&asic2);
 						asic3.opt.callOptimized(&asic3);
 
-						postSample(asic3.readGRAM(0xe8), asic3.readGRAM(0xec));
+						emitAudio(asic3.readGRAM(0xe8), asic3.readGRAM(0xec));
 
 						for (int k = 0; k <= 0x4; k += 2) asic1.writeGRAM(asic0.readGRAM(0x80 + k), k);
 						for (int k = 0; k <= 0xa; k += 2) asic2.writeGRAM(asic1.readGRAM(0x80 + k), k);
@@ -379,7 +393,7 @@ namespace jeLib
 						}
 						runAsics(split, 4);
 						for (int b = split; b < 3; b++) handoff(b);
-						postSample(asic3.readGRAM(0xe8), asic3.readGRAM(0xec));
+						emitAudio(asic3.readGRAM(0xe8), asic3.readGRAM(0xec));
 						syncAsics(split, 4);
 					}
 				}
