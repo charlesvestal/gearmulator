@@ -101,6 +101,15 @@ namespace esp
 	    m_asm.ldr(ptrEram, ptr(ptrVars, offsetof(CoreData, eramPtr)));
 	    m_asm.mov(satMin, -0x800000);
 	    m_asm.mov(satMax, 0x7fffff);
+	    /* The interpreter carries last_mulInput{A,B}_24 across samples as ESPCore
+	     * members; here they start at 0 on every call. That differs only if a
+	     * program's FIRST emitted op is a kDMAC, since a DMAC is their only reader.
+	     * Measured over the 15 programs the boot snapshot compiles (all four test
+	     * scripts): never -- the first emitted op is a MAC every time. Not proven
+	     * for patches outside that set. Upstream leaves these registers holding
+	     * whatever the caller had, and does not write the accumulators back either
+	     * (see emitEnd), so a program pass is treated as self-contained; zero at
+	     * least makes that explicit and deterministic. */
 	    m_asm.mov(last_mulInputA_24, 0);
 	    m_asm.mov(last_mulInputB_24, 0);
 	}

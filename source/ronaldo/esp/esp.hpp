@@ -22,11 +22,11 @@ class ERAM;
 // the ARM64 JIT rebase the ring pointer once per call and address every slot with an immediate offset.
 // Old-ring physical slot Q lives at Q+256 while Q < iramPos, else at Q; sync() moves the one slot
 // whose home changes when iramPos decrements. Host-side accessors must use the same (unmasked) index.
-#if defined(__aarch64__)
+// Unconditional: gating this on the host architecture gave x86 and ARM64 two
+// different ring layouts, so a build could only validate the one it happened to
+// compile. Costs 1 KB per buffer and one memcpy per 256 samples on the arches
+// whose emitter does not exploit it.
 #define ESP_IRAM_MIRROR 1
-#else
-#define ESP_IRAM_MIRROR 0
-#endif
 #define ESP_RAM_BUF_SIZE (ESP_IRAM_MIRROR ? 512 : 256)
 
 // Snapshot format is the 256-entry ring in its classic physical layout (slot Q holds logical

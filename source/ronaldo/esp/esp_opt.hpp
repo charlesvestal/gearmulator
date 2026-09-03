@@ -9,11 +9,12 @@
 #include "esp_jit_x64.h"
 #include "esp_jit_arm64.h"
 #include "esp_jit_types.h"
-#ifdef JE_PROFILE
-#include "../je8086/jeLib/je_profile.h"
-#endif
 
 constexpr int PRAM_SIZE = 768;
+
+/* JE_GENLOG=1 traces JIT recompiles on stderr. Read once: this is consulted
+ * from genProgram(), which runs on the render thread. */
+inline bool espGenLog() { static const bool on = getenv("JE_GENLOG") != nullptr; return on; }
 
 /* Diagnostics: global counters for JIT activity (all ESP instances). */
 inline uint64_t g_esp_genprogram_count = 0;
@@ -219,16 +220,6 @@ public:
     if (cores & 2) coreEmitter1.init(esp, &esp->core1);
 
     updateCoef(esp);
-#ifdef JE_PROFILE
-    {
-      extern struct JeProfile je_prof;
-      if (m_profAsic < 0) m_profAsic = je_prof.nextAsic++ & 3;
-      coreEmitter0.profAsic = coreEmitter1.profAsic = m_profAsic;
-      coreEmitter0.profCore = 0; coreEmitter1.profCore = 1;
-      je_prof.emitted[m_profAsic][0] = je_prof.emitted[m_profAsic][1] = 0;
-      je_prof.macs[m_profAsic][0] = je_prof.macs[m_profAsic][1] = 0;
-    }
-#endif
 
     struct timespec _t0; clock_gettime(CLOCK_MONOTONIC, &_t0);
     // logger.log("#### CORE 0 ####\n");
@@ -236,7 +227,7 @@ public:
     
     // logger.log("\n\n\n#### CORE 1 ####\n");
     if (cores & 2) genCore(esp, 1, &coreEmitter1, &runCore1, true);
-    if (getenv("JE_GENLOG")) {
+    if (espGenLog()) {
       struct timespec _t1; clock_gettime(CLOCK_MONOTONIC, &_t1);
       fprintf(stderr, "[genProgram pid=%d] cores=%u %.2f ms (#%llu)\n", (int)getpid(), cores,
               ((_t1.tv_sec-_t0.tv_sec)*1e9 + (_t1.tv_nsec-_t0.tv_nsec))/1e6, (unsigned long long)g_esp_genprogram_count);
@@ -262,7 +253,7 @@ public:
       if (m_programDirty > 0)
       {
           if (--m_programDirty == 0) {
-              if (getenv("JE_GENLOG")) fprintf(stderr, "[gen pid=%d this=%p] at sample %llu, first dirty at %llu, %u writes\n", (int)getpid(), (void*)this, (unsigned long long)m_sampleClock, (unsigned long long)m_firstDirty, m_dirtyWrites);
+              if (espGenLog()) fprintf(stderr, "[gen pid=%d this=%p] at sample %llu, first dirty at %llu, %u writes\n", (int)getpid(), (void*)this, (unsigned long long)m_sampleClock, (unsigned long long)m_firstDirty, m_dirtyWrites);
               m_dirtyWrites = 0;
               const uint32_t cores = m_dirtyCores;
               m_dirtyCores = 0;
@@ -307,9 +298,6 @@ private:
   asmjit::FileLogger logger;
   uint32_t m_programDirty = 0;
   uint32_t m_dirtyCores = 0;
-#ifdef JE_PROFILE
-  int m_profAsic = -1;
-#endif
   
   typedef void(*RunCore)(int8_t* coefsPtr, int32_t *iramPtr, int32_t *gramPtr, CoreData *varPtr, uint32_t eramPos, uint32_t iramPos, int64_t unused1, int64_t unused2);
   RunCore runCore0 = nullptr, runCore1 = nullptr;
@@ -375,16 +363,10 @@ private:
     m_asm.finalize();
 #endif
 	clock_gettime(CLOCK_MONOTONIC, &_g2);
-#ifdef JE_PROFILE
-    {
-      extern struct JeProfile je_prof;
-      je_prof.codeBytes[m_profAsic][core] = (uint32_t)code.codeSize();
-    }
-#endif
     
     const auto err = m_rt.add(dest, &code);
 	clock_gettime(CLOCK_MONOTONIC, &_g3);
-	if (getenv("JE_GENLOG")) {
+	if (espGenLog()) {
 		auto ms = [](const timespec& a, const timespec& b){ return ((b.tv_sec-a.tv_sec)*1e9 + (b.tv_nsec-a.tv_nsec))/1e6; };
 		fprintf(stderr, "[genCore %u] emit %.3f finalize %.3f add %.3f ms, %zu bytes\n", core, ms(_g0,_g1), ms(_g1,_g2), ms(_g2,_g3), code.codeSize());
 	}
@@ -511,13 +493,6 @@ private:
 
     	if (instr.opType == kNop) return;
 
-#ifdef JE_PROFILE
-		{
-			extern struct JeProfile je_prof;
-			je_prof.emitted[profAsic][profCore]++;
-			if (!instr.m_access.nomac && instr.m_access.srcReg != -1 && instr.m_access.destReg != -1) je_prof.macs[profAsic][profCore]++;
-		}
-#endif
 		bool nextIsDmac = false;
 		for (int i = pc + 1; i < PRAM_SIZE; i++)
 		{
@@ -546,17 +521,36 @@ private:
     }
   
     bool lastMul30 = false;
-#ifdef JE_PROFILE
-    int profAsic = 0, profCore = 0;
-#endif
 
 		void pre_optimize()
 		{
 			for (int i = 0; i < PRAM_SIZE; i++)
 				pram_opt[i] = ESPOptInstr(core->pram[i]);
 
-			// Decided limitations: We will not support op 0x34, mem & 0xcc == 0xc0 (these are the jump operations)
-			for (int pc = 0; pc < PRAM_SIZE; pc++) assert((pram_opt[pc].op != 0xd || (pram_opt[pc].mem & 0xcc) != 0xc0) && "Jumps!"); // jumps. bail.
+			/* Decided limitation: op 0x34 with mem & 0xcc == 0xc0 (the jump operations)
+			 * is not supported. The whole emitter treats the program as straight-line
+			 * code -- pc runs 0..PRAM_SIZE once and the dense ARM64 path also decides
+			 * dead stores from the next *statically* emitted op, which is only the next
+			 * executed op when there are no branches. This used to be an assert, so it
+			 * vanished under NDEBUG in every -Ofast build: a program containing a jump
+			 * would then be silently mis-compiled. Report it instead. */
+			for (int pc = 0; pc < PRAM_SIZE; pc++)
+			{
+				if (pram_opt[pc].op == 0xd && (pram_opt[pc].mem & 0xcc) == 0xc0)
+				{
+					/* Report once and keep going: the compiled program will be wrong,
+					 * but aborting the render thread would take the host down with it. */
+					static bool reported = false;
+					if (!reported)
+					{
+						reported = true;
+						fprintf(stderr, "esp: jump op at pram[%d] (op=%02x mem=%02x); "
+						                "the JIT cannot compile jumps, output past here is undefined\n",
+						        pc, pram_opt[pc].op, pram_opt[pc].mem);
+					}
+					break;
+				}
+			}
 
 			const MemAccess wA = {kNone, false}, wB = {kNone, true}, swA = {kSavesA, false}, swB = {kSavesB, true}, sBwA = {kSavesB, false}, sAwB = {kSavesA, true};
 
