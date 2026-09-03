@@ -108,10 +108,16 @@ namespace jeLib
 			kFader_PitchEnvD
 		};
 
-		/* Fork-parallel mode (process-local after fork, no race).
+		/* Stage-scoped state. thread_local, not plain global: with fork every stage
+		 * got a private copy of the whole emulator for free, but a THREADED
+		 * pipeline runs all stages in one address space and each needs its own
+		 * bounds and handoff callbacks. Fork is unaffected -- the child continues
+		 * on the thread that inherited these values.
+		 *
+		 * Fork-parallel mode (stage-local, no race).
 		 * 0 = all ASICs (default), 1 = parent: H8S + ASICs [0, split),
 		 * 2 = child: ASICs [split, 4). */
-		inline int g_je_parallel_mode = 0;
+		inline thread_local int g_je_parallel_mode = 0;
 		/* First ASIC owned by the child. 2 (ASIC0+1 | ASIC2+3) is the historical split;
 		 * 1 (ASIC0 | ASIC1+2+3) balances the halves — the H8S is the parent's real cost.
 		 * Must be set before the fork; only 1 and 2 are supported (the 2->3 handoff
@@ -121,8 +127,8 @@ namespace jeLib
 		 * [0, g_je_split_asic); a child stage may be any contiguous run above it,
 		 * so a 3-stage {0}/{1}/{2,3} pipeline is the 2-stage code with different
 		 * bounds. Process-local after fork. */
-		inline int g_je_stage_lo = 0;
-		inline int g_je_stage_hi = 4;
+		inline thread_local int g_je_stage_lo = 0;
+		inline thread_local int g_je_stage_hi = 4;
 		/* Words handed from ASIC n to ASIC n+1 at GRAM 0x80.. (dest 0..), per boundary.
 		 * The 2->3 boundary also carries 0xa0/0xa2 -> 0x20/0x22, packed as words 8, 9
 		 * of the handoff payload (JE_HANDOFF_MAX). */
@@ -130,13 +136,19 @@ namespace jeLib
 		inline constexpr int JE_HANDOFF_MAX = 10;
 		/* Mode 1: called per sample with ASIC(split-1)'s handoff values
 		 * (g_je_handoff_words[split-1] of them). */
-		inline std::function<void(const int32_t*)> g_je_gram_produce;
+		/* Audio out for the stage that owns ASIC3. postSample is a MultiAsic
+		 * MEMBER, so with fork each stage had its own; threads share one object
+		 * and the last stage's audio push would also be invoked by stage 0's
+		 * dummy call below. Stage-scoped hook instead: set it and the owning
+		 * stage uses it, leave it unset and postSample behaves as before. */
+		inline thread_local std::function<void(int32_t, int32_t)> g_je_stage_audio_out;
+		inline thread_local std::function<void(const int32_t*)> g_je_gram_produce;
 		/* Mode 2: called per sample to receive those values.
 		 * Returns false if shutdown requested. */
-		inline std::function<bool(int32_t*)> g_je_gram_consume;
+		inline thread_local std::function<bool(int32_t*)> g_je_gram_consume;
 		/* Mode 1: called when H8S writes to a child-owned ASIC's registers (PRAM
 		 * programming). Forwards the write to the child so it sees patch changes. */
-		inline std::function<void(int asic, uint32_t addr, uint8_t val)> g_je_uc_write_forward;
+		inline thread_local std::function<void(int asic, uint32_t addr, uint8_t val)> g_je_uc_write_forward;
 
 		/* Diagnostic: fires on EVERY H8S→ASIC write, all 4 ASICs, regardless
 		 * of parallel mode. Used by spike_protocol to characterize the
@@ -222,7 +234,8 @@ namespace jeLib
 				// 2. Output: audio if this stage holds ASIC3, else the handoff to the
 				//    next stage — read PRE-sync, same point as the parent's produce.
 				if (hi == 4) {
-					postSample(asic3.readGRAM(0xe8), asic3.readGRAM(0xec));
+					if (g_je_stage_audio_out) g_je_stage_audio_out(asic3.readGRAM(0xe8), asic3.readGRAM(0xec));
+					else postSample(asic3.readGRAM(0xe8), asic3.readGRAM(0xec));
 				} else if (g_je_gram_produce) {
 					int32_t gram[JE_HANDOFF_MAX];
 					readHandoff(hi - 1, gram);
