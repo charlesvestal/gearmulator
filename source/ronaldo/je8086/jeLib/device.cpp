@@ -1,6 +1,8 @@
 #include "device.h"
 
 #include "je8086.h"
+
+#include <cstdlib>
 #include "jeThread.h"
 #include "synthLib/midiToSysex.h"
 
@@ -28,6 +30,32 @@ namespace jeLib
 		{
 			m_je8086.reset();
 			m_je8086.reset(new Je8086(_params.romData, ramDataFilename));
+		}
+
+		/* Opt in to the parallel ASIC pipeline (see jePipeline.h). Off unless asked
+		 * for, and only worth asking for where one core cannot render the chain in
+		 * real time -- an SBC, not a desktop.
+		 *
+		 * Environment rather than an API call for now because a plugin has no way
+		 * to pass it: a host loads the binary and that is that. A real version
+		 * belongs in the plugin's own settings. Measured on a Pi 4 through a CLAP
+		 * host: 0.7x real time without it, which is unusable. */
+		if (const char* bounds = getenv("JE_PIPELINE"))
+		{
+			const auto parse = [](const char* _s)
+			{
+				std::vector<int> v;
+				if (!_s) return v;
+				int n = 0; bool any = false;
+				for (const char* c = _s;; ++c)
+				{
+					if (*c >= '0' && *c <= '9') { n = n * 10 + (*c - '0'); any = true; }
+					else { if (any) v.push_back(n); n = 0; any = false; if (!*c) break; }
+				}
+				return v;
+			};
+			const auto latency = getenv("JE_PIPELINE_LATENCY") ? atoll(getenv("JE_PIPELINE_LATENCY")) : 64;
+			m_je8086->requestParallelPipeline(parse(bounds), parse(getenv("JE_PIPELINE_CORES")), latency);
 		}
 
 		m_thread.reset(new JeThread(*m_je8086));
