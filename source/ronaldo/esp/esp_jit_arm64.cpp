@@ -104,9 +104,10 @@ namespace esp
 	    /* The interpreter carries last_mulInput{A,B}_24 across samples as ESPCore
 	     * members; here they start at 0 on every call. That differs only if a
 	     * program's FIRST emitted op is a kDMAC, since a DMAC is their only reader.
-	     * Measured over the 15 programs the boot snapshot compiles (all four test
-	     * scripts): never -- the first emitted op is a MAC every time. Not proven
-	     * for patches outside that set. Upstream leaves these registers holding
+	     * Measured across the whole tests/scripts corpus -- 109 program compiles
+	     * in patch_sweep, 121 in performance_select, 15 in each note-only script
+	     * -- the first emitted op is a MAC every time, never a DMAC. Not proven
+	     * for patches outside that corpus. Upstream leaves these registers holding
 	     * whatever the caller had, and does not write the accumulators back either
 	     * (see emitEnd), so a program pass is treated as self-contained; zero at
 	     * least makes that explicit and deterministic. */
