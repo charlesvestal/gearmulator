@@ -8,8 +8,12 @@
 #include "synthLib/midiBufferParser.h"
 #include "synthLib/midiRateLimiter.h"
 
+#include <memory>
+
 namespace jeLib
 {
+	class JePipeline;
+
 	class Je8086
 	{
 	public:
@@ -17,7 +21,7 @@ namespace jeLib
 		using SampleBuffer = std::vector<SampleFrame>;
 
 		Je8086(const std::vector<uint8_t>& _romData, const std::string& _ramDataFilename);
-		~Je8086() = default;
+		~Je8086();
 
 		void addMidiEvent(const synthLib::SMidiEvent& _event);
 		void readMidiOut(std::vector<synthLib::SMidiEvent>& _events);
@@ -26,6 +30,14 @@ namespace jeLib
 		void clearSampleBuffer() { m_sampleBuffer.clear(); }
 
 		void step();
+
+		/* Opt in to the parallel ASIC pipeline; see jePipeline.h. Off unless asked
+		 * for, and worth asking for only where one core cannot render the chain in
+		 * real time. The pipeline is created on the FIRST step() rather than here:
+		 * the stage-scoped emulator state it installs is thread_local, so it has to
+		 * land on whichever thread drives step(), not on the caller's. */
+		void requestParallelPipeline(const std::vector<int>& _bounds, const std::vector<int>& _cores = {}, int64_t _window = 64);
+		bool hasParallelPipeline() const;
 
 		bool hasDoneFactoryReset() const { return m_factoryreset; }
 
@@ -58,6 +70,11 @@ namespace jeLib
 		int ctr {0};
 
 		bool m_factoryreset = false;
+
+		std::unique_ptr<JePipeline> m_pipeline;
+		std::vector<int> m_pipelineBounds, m_pipelineCores;
+		bool m_pipelineRequested = false;
+		int64_t m_pipelineWindow = 64;
 
 		synthLib::MidiBufferParser m_midiOutParser;
 		std::vector<synthLib::SMidiEvent> m_midiInEvents;

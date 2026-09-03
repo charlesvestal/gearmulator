@@ -142,6 +142,12 @@ namespace jeLib
 		 * dummy call below. Stage-scoped hook instead: set it and the owning
 		 * stage uses it, leave it unset and postSample behaves as before. */
 		inline thread_local std::function<void(int32_t, int32_t)> g_je_stage_audio_out;
+		/* Mode 1 hands Device::process() a silent sample per rendered sample so it
+		 * keeps its expected count while the real audio is produced elsewhere --
+		 * correct when "elsewhere" is another PROCESS. When the stages are threads
+		 * the parent drains their audio into that same buffer itself, so the dummy
+		 * would interleave a zero with every real sample. Cleared by JePipeline. */
+		inline thread_local bool g_je_parent_dummy_audio = true;
 		inline thread_local std::function<void(const int32_t*)> g_je_gram_produce;
 		/* Mode 2: called per sample to receive those values.
 		 * Returns false if shutdown requested. */
@@ -381,7 +387,8 @@ namespace jeLib
 						syncAsics(0, split);
 						// Dummy postSample so Device::process() gets its
 						// expected audio output and doesn't spin forever
-						postSample(0, 0);
+						if (g_je_parent_dummy_audio)
+							postSample(0, 0);
 					} else {
 						// Child process driven through the H8S (unused by the fork
 						// paths, which call processSampleChild directly).
