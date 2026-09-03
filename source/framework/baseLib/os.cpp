@@ -2,7 +2,9 @@
 
 #ifdef _MSC_VER
 #include <cfloat>
-#elif defined(HAVE_SSE)
+#elif defined(__aarch64__) || defined(__arm64__)
+#include <cstdint>
+#elif defined(__SSE__)
 #include <immintrin.h>
 #endif
 
@@ -18,7 +20,12 @@ namespace baseLib
     {
 #if defined(_MSC_VER)
         _controlfp(_DN_FLUSH, _MCW_DN);
-#elif defined(HAVE_SSE)
+#elif defined(__aarch64__) || defined(__arm64__)
+        uint64_t fpcr;
+        __asm__ __volatile__("mrs %0, FPCR" : "=r"(fpcr));
+        fpcr |= (1ULL << 24);   // FZ bit
+        __asm__ __volatile__("msr FPCR, %0" ::"r"(fpcr));
+#elif defined(__SSE__)
         _MM_SET_FLUSH_ZERO_MODE(_MM_FLUSH_ZERO_ON);
 #endif
     }

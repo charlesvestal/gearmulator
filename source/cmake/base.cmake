@@ -100,8 +100,8 @@ else()
 		endif()
 	endif()
 
-	string(APPEND CMAKE_C_FLAGS_RELEASE " -Ofast -fno-stack-protector")
-	string(APPEND CMAKE_CXX_FLAGS_RELEASE " -Ofast -fno-stack-protector")
+	string(APPEND CMAKE_C_FLAGS_RELEASE " -Ofast -fno-stack-protector -funroll-loops -fomit-frame-pointer")
+	string(APPEND CMAKE_CXX_FLAGS_RELEASE " -Ofast -fno-stack-protector -funroll-loops -fomit-frame-pointer")
 	string(APPEND CMAKE_CXX_FLAGS_DEBUG " -rdynamic")
 
 	# Link the C++ runtime statically so that shipped binaries do not require the
