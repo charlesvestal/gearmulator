@@ -7,6 +7,8 @@
 
 #include <atomic>
 #include <cstring>
+#include <cstdlib>
+#include <ctime>
 
 #ifdef __linux__
 #include <sched.h>
@@ -29,12 +31,16 @@ namespace jeLib
 #endif
 		}
 
-		/* The stages are sample-locked and never more than a few samples apart, so
-		 * the wait is short and sleeping costs more than it saves. Hint the core
-		 * instead: sched_yield() here is a SYSCALL per turn and four stages
-		 * spinning on it dominated the run -- it cost more than half the
-		 * pipeline's speedup. Fall back to a real yield only after a long wait,
-		 * which in practice means a stall rather than a handoff. */
+		/* Spin briefly, then SLEEP. A pure spin is faster on an idle benchmark box
+		 * and ruinous on a machine that also has to play the audio: when a real
+		 * consumer paces us we are ahead of it most of the time, so the stages sit
+		 * in the wait burning whole cores and starving the process that owns the
+		 * sound card. Measured with aplay at a 20 ms buffer: spinning gave 12
+		 * underruns in 15 s at normal priority and 115 at SCHED_FIFO 60, because a
+		 * spinning realtime thread never yields to the consumer at all.
+		 *
+		 * The back-off is bounded well under one audio block so it cannot become
+		 * the thing that misses a deadline. */
 		inline void cpuRelax()
 		{
 #if defined(__aarch64__) || defined(__arm__)
@@ -47,14 +53,35 @@ namespace jeLib
 		template<typename Pred, typename Stop>
 		inline bool spinWait(Pred _pred, Stop _stop)
 		{
+			/* Sleep length is a real-time trade, not a throughput one. A sample is
+			 * 11 us at 88.2 kHz, so a 200 us sleep costs ~18 samples of wake-up on
+			 * every handoff; chained across stages that is what eats a small audio
+			 * buffer, and it is why this could not go below a 26 ms buffer live
+			 * even with two thirds of the CPU idle. Stay sub-sample. */
+			static const uint32_t s_spins = []
+			{
+				const char* e = getenv("JE_PIPELINE_SPINS");
+				return e ? static_cast<uint32_t>(atoi(e)) : 4096u;
+			}();
+			static const uint32_t s_sleepNs = []
+			{
+				const char* e = getenv("JE_PIPELINE_SLEEP_NS");
+				return e ? static_cast<uint32_t>(atoi(e)) : 5'000u;
+			}();
+
 			uint32_t spins = 0;
 			while (!_pred())
 			{
 				if (_stop()) return false;
-				if (++spins < 2048)
+				if (++spins < s_spins)
+				{
 					cpuRelax();
-				else
-					std::this_thread::yield();
+				}
+				else if (s_sleepNs)
+				{
+					timespec ts{0, static_cast<long>(s_sleepNs)};
+					nanosleep(&ts, nullptr);
+				}
 			}
 			return true;
 		}
