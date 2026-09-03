@@ -12,12 +12,46 @@
 
 #ifdef __linux__
 #include <sched.h>
+#include <pthread.h>
 #endif
 
 namespace jeLib
 {
 	namespace
 	{
+		/* Raise this thread to SCHED_FIFO.
+		 *
+		 * A host calls process() from a realtime thread -- Ardour uses FIFO 78 --
+		 * and jeLib then hands the work to JeThread, which is SCHED_OTHER, and this
+		 * pipeline hands it on again to stage threads that were also SCHED_OTHER.
+		 * The host's realtime thread therefore BLOCKS ON NON-REALTIME WORKERS, and
+		 * whenever a GUI or an X server wants the CPU those workers are scheduled
+		 * late and the deadline is missed. Measured in Ardour on a Pi: continuous
+		 * underruns with 70% of the CPU idle, which is the signature of priority
+		 * inversion rather than of too little compute.
+		 *
+		 * Stay BELOW the host's own audio thread: we are a producer it waits on,
+		 * not a peer, and outranking it only moves the starvation elsewhere.
+		 * Silently does nothing without permission (see RLIMIT_RTPRIO). */
+		inline bool raiseRealtime(const int _prio)
+		{
+#ifdef __linux__
+			if (_prio <= 0) return false;
+			sched_param sp{};
+			sp.sched_priority = _prio;
+			return pthread_setschedparam(pthread_self(), SCHED_FIFO, &sp) == 0;
+#else
+			(void)_prio; return false;
+#endif
+		}
+
+		inline int desiredRealtimePrio()
+		{
+			if (const char* e = getenv("JE_PIPELINE_RTPRIO"))
+				return atoi(e);
+			return 0;	// off unless asked: taking RT priority uninvited is rude
+		}
+
 		inline void pinCore(const int _core)
 		{
 #ifdef __linux__
@@ -153,6 +187,9 @@ namespace jeLib
 
 		installParentHooks(_bounds[0]);
 		pinCore(core(0));
+		/* This runs on whichever thread drives step() -- JeThread -- and that
+		 * thread renders stage 0, so it needs the same treatment as the stages. */
+		raiseRealtime(desiredRealtimePrio());
 
 		for (int s = 1; s < m_numStages; ++s)
 			impl.threads[s] = std::thread([this, s, c = core(s)] { stageMain(s, c); });
@@ -241,6 +278,7 @@ namespace jeLib
 
 		pinCore(_core);
 		baseLib::setFlushDenormalsToZero();	// FPCR is per thread
+		raiseRealtime(desiredRealtimePrio());
 
 		devices::g_je_parallel_mode = 2;
 		devices::g_je_stage_lo = lo;
