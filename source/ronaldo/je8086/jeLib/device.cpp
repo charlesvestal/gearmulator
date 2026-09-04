@@ -4,6 +4,7 @@
 
 #include <cstdlib>
 #include "jeThread.h"
+#include "jePipeline.h"
 #include "synthLib/midiToSysex.h"
 
 namespace
@@ -219,6 +220,13 @@ namespace jeLib
 
 	void Device::processAudio(const synthLib::TAudioInputs& _inputs, const synthLib::TAudioOutputs& _outputs, const size_t _samples)
 	{
+		/* We are on the host's audio thread here, and it is the only place we ever
+		 * see how the host schedules it. The pipeline's workers mirror it one step
+		 * below; without that the host's realtime thread blocks on SCHED_OTHER
+		 * workers, which is priority inversion and sounds exactly like the plugin
+		 * being too slow. No-op when there is no pipeline or no realtime host. */
+		pipelineAdoptHostSchedule();
+
 		m_thread->processSamples(static_cast<uint32_t>(_samples), getExtraLatencySamples(), m_midiIn, m_midiOut);
 		m_midiIn.clear();
 

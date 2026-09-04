@@ -8,6 +8,13 @@
 
 namespace jeLib
 {
+	/* Tell the pipeline how the caller is scheduled, so its worker threads can
+	 * mirror it one priority below. Call from the HOST'S AUDIO THREAD -- that is
+	 * the thread whose deadline we must not miss. Safe to call every block; it
+	 * does nothing unless the schedule changed, and nothing at all if the caller
+	 * is not realtime. */
+	void pipelineAdoptHostSchedule();
+
 	class Je8086;
 
 	/* Opt-in parallel ASIC pipeline.

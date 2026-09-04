@@ -33,23 +33,76 @@ namespace jeLib
 		 * Stay BELOW the host's own audio thread: we are a producer it waits on,
 		 * not a peer, and outranking it only moves the starvation elsewhere.
 		 * Silently does nothing without permission (see RLIMIT_RTPRIO). */
-		inline bool raiseRealtime(const int _prio)
+		/* What the host's audio thread told us about itself, and a generation so
+		 * workers notice. The pipeline is built during boot, long before a host
+		 * ever calls process(), so the schedule cannot simply be read at
+		 * construction -- it arrives later and every worker adopts it then. */
+		struct HostSchedule
+		{
+			std::atomic<int> policy{-1};
+			std::atomic<int> priority{0};
+			std::atomic<uint32_t> generation{0};
+		};
+
+		inline HostSchedule& hostSchedule()
+		{
+			static HostSchedule s;
+			return s;
+		}
+
+		inline bool raiseRealtime()
 		{
 #ifdef __linux__
-			if (_prio <= 0) return false;
+			int policy = SCHED_FIFO;
+			int prio = 0;
+
+			/* Local override for benchmarks and the Move build, which know the
+			 * hardware and have no host to inherit from. Not upstreamed. */
+			static const int envPrio = getenv("JE_PIPELINE_RTPRIO") ? atoi(getenv("JE_PIPELINE_RTPRIO")) : -1;
+
+			if (envPrio >= 0)
+			{
+				prio = envPrio;
+			}
+			else
+			{
+				policy = hostSchedule().policy.load(std::memory_order_relaxed);
+
+				// The host is not realtime, so neither are we. Taking priority
+				// uninvited is rude, and pointless if nobody is waiting on us.
+				if (policy != SCHED_FIFO && policy != SCHED_RR)
+					return false;
+
+				/* One step BELOW the host's audio thread: we are a producer it
+				 * waits on, not a peer, and outranking it only moves the
+				 * starvation elsewhere. */
+				prio = hostSchedule().priority.load(std::memory_order_relaxed) - 1;
+
+				const int lo = sched_get_priority_min(policy);
+				if (prio < lo)
+					prio = lo;
+			}
+
+			if (prio <= 0)
+				return false;
+
 			sched_param sp{};
-			sp.sched_priority = _prio;
-			return pthread_setschedparam(pthread_self(), SCHED_FIFO, &sp) == 0;
+			sp.sched_priority = prio;
+			return pthread_setschedparam(pthread_self(), policy, &sp) == 0;
 #else
-			(void)_prio; return false;
+			return false;
 #endif
 		}
 
-		inline int desiredRealtimePrio()
+		/* Cheap enough to sit in the sample loop: one relaxed load unless the
+		 * host's schedule actually changed. */
+		inline void followHostSchedule(uint32_t& _seen)
 		{
-			if (const char* e = getenv("JE_PIPELINE_RTPRIO"))
-				return atoi(e);
-			return 0;	// off unless asked: taking RT priority uninvited is rude
+			const auto gen = hostSchedule().generation.load(std::memory_order_relaxed);
+			if (gen == _seen)
+				return;
+			_seen = gen;
+			raiseRealtime();
 		}
 
 		inline void pinCore(const int _core)
@@ -189,7 +242,7 @@ namespace jeLib
 		pinCore(core(0));
 		/* This runs on whichever thread drives step() -- JeThread -- and that
 		 * thread renders stage 0, so it needs the same treatment as the stages. */
-		raiseRealtime(desiredRealtimePrio());
+		raiseRealtime();
 
 		for (int s = 1; s < m_numStages; ++s)
 			impl.threads[s] = std::thread([this, s, c = core(s)] { stageMain(s, c); });
@@ -268,6 +321,25 @@ namespace jeLib
 		};
 	}
 
+	void pipelineAdoptHostSchedule()
+	{
+#ifdef __linux__
+		int policy = 0;
+		sched_param sp{};
+		if (pthread_getschedparam(pthread_self(), &policy, &sp) != 0)
+			return;
+
+		auto& hs = hostSchedule();
+		if (hs.policy.load(std::memory_order_relaxed) == policy &&
+		    hs.priority.load(std::memory_order_relaxed) == sp.sched_priority)
+			return;
+
+		hs.policy.store(policy, std::memory_order_relaxed);
+		hs.priority.store(sp.sched_priority, std::memory_order_relaxed);
+		hs.generation.fetch_add(1, std::memory_order_release);
+#endif
+	}
+
 	void JePipeline::stageMain(const int _stage, const int _core)
 	{
 		auto& impl = *m_impl;
@@ -278,7 +350,7 @@ namespace jeLib
 
 		pinCore(_core);
 		baseLib::setFlushDenormalsToZero();	// FPCR is per thread
-		raiseRealtime(desiredRealtimePrio());
+		raiseRealtime();
 
 		devices::g_je_parallel_mode = 2;
 		devices::g_je_stage_lo = lo;
@@ -335,9 +407,11 @@ namespace jeLib
 
 		auto& asics = m_je.getAsics();
 		uint32_t sample = 0;
+		uint32_t seenSchedule = 0;
 
 		while (!impl.shutdown.load(std::memory_order_relaxed))
 		{
+			followHostSchedule(seenSchedule);
 			/* Wait for our input handoff AND for the previous stage to have
 			 * published this sample, so forwarded register writes stamped with it
 			 * have all arrived. */
@@ -407,6 +481,11 @@ namespace jeLib
 
 	void JePipeline::deliver(const std::function<void(int32_t, int32_t)>& _sink, const int64_t _latency)
 	{
+		/* This runs on the thread driving step(), which renders stage 0 and so
+		 * needs the same priority as the stages. */
+		static thread_local uint32_t seenSchedule = 0;
+		followHostSchedule(seenSchedule);
+
 		auto& impl = *m_impl;
 		const int64_t produced = impl.stage[0].samplesProduced.load(std::memory_order_acquire);
 
