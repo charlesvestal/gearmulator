@@ -18,6 +18,11 @@ namespace
 
 namespace jeLib
 {
+	/* The pipeline hands one sample over for every sample rendered, taken this
+	 * many samples late. It only has to cover what is in flight; two is enough,
+	 * and a constant delay is what makes the output bit-exact against serial. */
+	static constexpr int64_t g_pipelineDelaySamples = 2;
+
 	constexpr uint8_t g_paramPageMasterVolume = 6;
 	constexpr uint8_t g_paramIndexMasterVolume = 0;
 
@@ -34,13 +39,23 @@ namespace jeLib
 
 		/* Opt in to the parallel ASIC pipeline (see jePipeline.h). Off unless asked
 		 * for, and only worth asking for where one core cannot render the chain in
-		 * real time -- an SBC, not a desktop.
+		 * real time -- an SBC, not a desktop. Measured on a Pi 4 through a CLAP
+		 * host: 0.7x real time without it, which is unusable; 1.8x with it.
 		 *
-		 * Environment rather than an API call for now because a plugin has no way
-		 * to pass it: a host loads the binary and that is that. A real version
-		 * belongs in the plugin's own settings. Measured on a Pi 4 through a CLAP
-		 * host: 0.7x real time without it, which is unusable. */
-		if (const char* bounds = getenv("JE_PIPELINE"))
+		 * The count arrives through DeviceCreateParams, which the plugin fills in
+		 * from its own settings. It has to be decided here, before the engine
+		 * thread exists, because the pipeline delivers audio on a fixed delay that
+		 * forms part of the latency we report. */
+		if (_params.dspThreads > 1)
+		{
+			std::vector<int> bounds;
+			for (uint32_t i = 1; i < _params.dspThreads && i < 4; ++i)
+				bounds.push_back(static_cast<int>(i));
+			m_je8086->requestParallelPipeline(bounds, {}, g_pipelineDelaySamples);
+		}
+		/* Local override for benchmarking and the Move build, which know the
+		 * hardware and do not go through the plugin settings. Not upstreamed. */
+		else if (const char* bounds = getenv("JE_PIPELINE"))
 		{
 			const auto parse = [](const char* _s)
 			{
@@ -169,9 +184,27 @@ namespace jeLib
 		return 88'000'000;
 	}
 
+	uint32_t Device::getMaxDspThreads() const
+	{
+		return 4;	// H8S+ASIC0 | ASIC1 | ASIC2 | ASIC3
+	}
+
 	uint32_t Device::getInternalLatencyMidiToOutput() const
 	{
-		return static_cast<uint32_t>(getSamplerate() * 4.5f / 1000.0f); // 4.5 ms
+		// 4.5 ms, plus the pipeline's fixed delivery delay when it is running.
+		return static_cast<uint32_t>(getSamplerate() * 4.5f / 1000.0f) + pipelineDelay();
+	}
+
+	uint32_t Device::getInternalLatencyInputToOutput() const
+	{
+		/* Only our own delay is reported here. Whatever the audio path costs
+		 * without the pipeline is unchanged and unmeasured, so it stays 0. */
+		return pipelineDelay();
+	}
+
+	uint32_t Device::pipelineDelay() const
+	{
+		return m_je8086 && m_je8086->hasParallelPipeline() ? static_cast<uint32_t>(g_pipelineDelaySamples) : 0;
 	}
 
 	void Device::readMidiOut(std::vector<synthLib::SMidiEvent>& _midiOut)
