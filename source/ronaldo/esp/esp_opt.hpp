@@ -273,7 +273,7 @@ public:
     if (op == 0x20 || op == 0x24) shiftAmount = (shift & 1) ? 6 : 7;
     data.coefs[i] = coef;
     data.shiftAmounts[i] = shiftAmount;
-    data.coefsShifted[i] = static_cast<int16_t>(static_cast<int32_t>(coef) << (7 - shiftAmount));
+    data.coefsShifted[i] = static_cast<int16_t>(static_cast<int32_t>(coef) * (1 << (7 - shiftAmount)));
   }
 
   // Recompute every entry of both cores (after a program write / recompile).
@@ -493,12 +493,26 @@ private:
 
     	if (instr.opType == kNop) return;
 
-		bool nextIsDmac = false;
+		/* The scan wraps: with the entry/exit state persisted, the "next emitted
+		 * op" of the LAST op in a program is the FIRST op of the next call, so a
+		 * program whose first op is a DMAC still needs the final last_mul values
+		 * written back. */
+		bool nextIsDmac = false, foundNext = false;
 		for (int i = pc + 1; i < PRAM_SIZE; i++)
 		{
 			if (pram_opt[i].opType == kNop) continue;
 			nextIsDmac = pram_opt[i].opType == kDMAC;
+			foundNext = true;
 			break;
+		}
+		if (!foundNext)
+		{
+			for (int i = 0; i < PRAM_SIZE; i++)
+			{
+				if (pram_opt[i].opType == kNop) continue;
+				nextIsDmac = pram_opt[i].opType == kDMAC;
+				break;
+			}
 		}
 
 		_jit.emitOp(pc, instr, lastMul30, nextIsDmac);
