@@ -12,7 +12,9 @@
  * The DSP runs its loop whether or not a note is held, so an idle device is a
  * fair measure of emulation throughput -- there is no note to play here.
  */
+#include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <memory>
@@ -27,12 +29,13 @@ int main(int _argc, char* _argv[])
 {
 	if(_argc < 2)
 	{
-		fprintf(stderr, "usage: %s <rom.bin> [seconds] [voices]\n", _argv[0]);
+		fprintf(stderr, "usage: %s <rom.bin> [seconds] [voices] [dspClockPercent]\n", _argv[0]);
 		return 1;
 	}
 
 	const double seconds = _argc > 2 ? atof(_argv[2]) : 5.0;
 	const auto voices = static_cast<uint8_t>(_argc > 3 ? atoi(_argv[3]) : 0);
+	const auto clockPercent = static_cast<uint32_t>(_argc > 4 ? atoi(_argv[4]) : 100);
 
 	setvbuf(stdout, nullptr, _IONBF, 0);
 
@@ -69,8 +72,19 @@ int main(int _argc, char* _argv[])
 		return 1;
 	}
 
+	/* Every DSP56300 device here answers canModifyDspClock() -- the Virus too,
+	 * not just the Waldorfs -- and the emulator's cost is very nearly linear in
+	 * emulated cycles. Underclocking is therefore the polyphony-for-CPU trade
+	 * an interpreted build needs, and it is a shipped feature, not a hack. */
+	if(clockPercent != 100 && !device->setDspClockPercent(clockPercent))
+	{
+		fprintf(stderr, "this device would not take a DSP clock of %u%%\n", clockPercent);
+		return 1;
+	}
+
 	const auto samplerate = device->getSamplerate();
-	printf("%s, %.0f Hz, rendering %.1f s\n", dsp56k::g_jitSupported ? "JIT" : "INTERPRETER", samplerate, seconds);
+	printf("%s, %.0f Hz, DSP clock %u%% (%llu Hz), rendering %.1f s\n", dsp56k::g_jitSupported ? "JIT" : "INTERPRETER",
+		samplerate, device->getDspClockPercent(), static_cast<unsigned long long>(device->getDspClockHz()), seconds);
 
 	constexpr size_t blockSize = 256;
 	std::vector<float> outL(blockSize), outR(blockSize), inL(blockSize), inR(blockSize);
@@ -113,17 +127,32 @@ int main(int _argc, char* _argv[])
 	}
 	printf("%u voices held\n", voices);
 
+	float peak = 0.0f;
+	double sumSq = 0.0;
+	size_t sumN = 0;
+
 	const auto total = static_cast<size_t>(seconds * samplerate);
 	const auto start = std::chrono::steady_clock::now();
 	for(size_t done=0; done<total; done+=blockSize)
 	{
 		device->process(inputs, outputs, blockSize, midiIn, midiOut);
 		midiOut.clear();
+		/* An underclocked DSP that has gone silent is not a faster synth, and
+		 * a real-time factor cannot tell the difference. */
+		for(size_t i=0; i<blockSize; ++i)
+		{
+			peak = std::max(peak, std::abs(outL[i]));
+			sumSq += static_cast<double>(outL[i]) * outL[i];
+			++sumN;
+		}
 	}
 	const auto elapsed = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
 
-	printf("%s, %u voices: %.2f s wall for %.1f s audio => %.3fx real-time\n",
-		dsp56k::g_jitSupported ? "JIT" : "INTERPRETER", voices, elapsed, seconds, seconds / elapsed);
+	printf("%s, %u voices, %u%% clock: %.2f s wall for %.1f s audio => %.3fx real-time\n",
+		dsp56k::g_jitSupported ? "JIT" : "INTERPRETER", voices, device->getDspClockPercent(), elapsed, seconds, seconds / elapsed);
+
+	printf("peak %.4f, rms %.4f (%s)\n", peak, sumN ? std::sqrt(sumSq / static_cast<double>(sumN)) : 0.0,
+		peak > 0.0001f ? "AUDIO" : "SILENT");
 
 	return 0;
 }
