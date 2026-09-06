@@ -8,6 +8,7 @@
 #include "synthLib/midiToSysex.h"
 
 #ifdef __APPLE__
+#include <sys/sysctl.h>
 #include <objc/message.h>
 #include <objc/runtime.h>
 #include <chrono>
@@ -157,6 +158,24 @@ namespace jeLib
 		jeDiag("[je] dspThreads from host = %u", _params.dspThreads);
 
 		jeDiag("[je] esp jit: %s", jeLib::devices::jeEspInterp() ? "OFF (interpreted)" : "on");
+
+#ifdef __APPLE__
+		/* How many PERFORMANCE cores are there really? M-series iPads are binned
+		 * -- some ship 3 P-cores, not 4 -- and the pipeline must not run more hot
+		 * threads than the P cluster has, or one stage is permanently on an E
+		 * core or preempting the host's audio thread. */
+		{
+			auto sysctlInt = [](const char* _name) -> int
+			{
+				int v = 0; size_t sz = sizeof(v);
+				return sysctlbyname(_name, &v, &sz, nullptr, 0) == 0 ? v : -1;
+			};
+			jeDiag("[je] cores: %d total, %d performance, %d efficiency",
+			       sysctlInt("hw.physicalcpu"),
+			       sysctlInt("hw.perflevel0.physicalcpu"),
+			       sysctlInt("hw.perflevel1.physicalcpu"));
+		}
+#endif
 
 		m_thread.reset(new JeThread(*m_je8086));
 

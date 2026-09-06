@@ -9,6 +9,7 @@
 #include "synthLib/midiRateLimiter.h"
 
 #include <memory>
+#include <string>
 
 namespace jeLib
 {
@@ -37,6 +38,7 @@ namespace jeLib
 		 * the stage-scoped emulator state it installs is thread_local, so it has to
 		 * land on whichever thread drives step(), not on the caller's. */
 		void requestParallelPipeline(const std::vector<int>& _bounds, const std::vector<int>& _cores = {}, int64_t _window = 64);
+
 		bool hasParallelPipeline() const;
 
 		bool hasDoneFactoryReset() const { return m_factoryreset; }

@@ -9,6 +9,7 @@
 
 #include <atomic>
 #include <mutex>
+#include <string>
 #include <thread>
 #include <cstring>
 #include <cstdlib>

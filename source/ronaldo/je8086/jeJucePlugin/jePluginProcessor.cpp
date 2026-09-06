@@ -58,7 +58,12 @@ namespace jeJucePlugin
 #else
 		const auto defaultLatencyBlocks = static_cast<int>(getPlugin().getLatencyBlocks());
 #endif
-		const auto latencyBlocks = getConfig().getIntValue("latencyBlocks", defaultLatencyBlocks);
+		/* JE_LATENCY_BLOCKS overrides for experiments: the buffer has to be deep
+		 * enough to ride out a dip, and a one-second dip to 0.90x eats 8820
+		 * samples, against the ~4500 that 8 blocks provides. */
+		const auto latencyBlocks = ::getenv("JE_LATENCY_BLOCKS")
+			? atoi(::getenv("JE_LATENCY_BLOCKS"))
+			: getConfig().getIntValue("latencyBlocks", defaultLatencyBlocks);
 		Processor::setLatencyBlocks(latencyBlocks);
 
 		/* Read before the device exists: the thread count is applied at creation
