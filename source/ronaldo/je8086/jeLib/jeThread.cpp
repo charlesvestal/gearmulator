@@ -1,5 +1,9 @@
 #include "jeThread.h"
 
+#ifdef __APPLE__
+#include <pthread.h>
+#endif
+
 #include "je8086.h"
 
 #include "dsp56kBase/threadtools.h"
@@ -66,7 +70,37 @@ namespace jeLib
 		}
 		else
 		{
-			m_pendingJobs.push_back(std::move(job));
+			/* NEVER block the host's audio thread. m_pendingJobs is a 32-deep
+			 * BLOCKING ring: once the engine falls behind enough to fill it,
+			 * push_back() stalls the caller inside process(), the host's callback
+			 * rate collapses, and the backlog can then never drain -- which is
+			 * self-sustaining, so the plugin plays cleanly and then breaks up for
+			 * good. Measured on an iPad in AUM as `pending 32` pinned forever with
+			 * the host down from 88200 to 26000 samples/s.
+			 *
+			 * Fold the work into a carry instead and hand it over when there is
+			 * room. The engine renders the same samples and the same MIDI, just in
+			 * larger chunks, and the audio thread always returns. */
+			if (!m_hasCarry)
+			{
+				m_carry = std::move(job);
+				m_hasCarry = true;
+			}
+			else
+			{
+				m_carry.samplesToProcess += job.samplesToProcess;
+				m_carry.midiEvents.insert(m_carry.midiEvents.end(),
+					std::make_move_iterator(job.midiEvents.begin()),
+					std::make_move_iterator(job.midiEvents.end()));
+			}
+
+			if (!m_pendingJobs.full())
+			{
+				m_pendingJobs.push_back(std::move(m_carry));
+				m_carry.samplesToProcess = 0;
+				m_carry.midiEvents.clear();
+				m_hasCarry = false;
+			}
 		}
 
 		{
@@ -88,6 +122,12 @@ namespace jeLib
 	{
 		dsp56k::ThreadTools::setCurrentThreadName("JE8086");
 		dsp56k::ThreadTools::setCurrentThreadPriority(dsp56k::ThreadPriority::Highest);
+#ifdef __APPLE__
+		/* On Apple silicon the QoS class, not the priority, is what keeps a
+		 * thread off the efficiency cores. The engine thread is what the host's
+		 * audio thread waits on, so it belongs with the interactive work. */
+		pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
+#endif
 
 		while (!m_exit)
 		{
@@ -105,6 +145,24 @@ namespace jeLib
 
 	void JeThread::processJob(ProcessJob& _job)
 	{
+		/* Capacity probe. "engine made" in the diagnostics is demand-limited by
+		 * construction -- it can only ever equal what the host asked for -- so it
+		 * cannot answer "how fast could this engine go". Timing the render loop
+		 * can: ns per sample, measured where the work actually happens, and
+		 * directly comparable between the standalone and the AUv3. */
+		const auto t0 = std::chrono::steady_clock::now();
+		const auto samplesThisJob = _job.samplesToProcess;
+		struct Timer {
+			JeThread& t; const std::chrono::steady_clock::time_point& t0; const uint32_t n;
+			~Timer() {
+				if (!n) return;
+				const auto ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+					std::chrono::steady_clock::now() - t0).count();
+				t.m_renderNs.fetch_add(static_cast<uint64_t>(ns), std::memory_order_relaxed);
+				t.m_renderSamples.fetch_add(n, std::memory_order_relaxed);
+			}
+		} timer{*this, t0, samplesThisJob};
+
 		if (m_tempMidiIn.empty())
 		{
 			std::swap(m_tempMidiIn, _job.midiEvents);
