@@ -98,7 +98,7 @@ namespace
 		}
 #endif
 #if BENCH_HAS_XT
-		if(_synth == "xt")
+		if(_synth == "xt" || _synth == "xtve")
 		{
 			/* The XT ships as two 128k EPROM halves that the loader interleaves
 			 * into one 256k image, so this takes a DIRECTORY, not a file. */
@@ -110,6 +110,11 @@ namespace
 			}
 			params.romData = rom.getData();
 			params.romName = rom.getFilename();
+			/* Voice expansion -- the three-DSP Microwave -- is bit 0 of
+			 * customData and defaults OFF, so plain "xt" is a ONE-DSP machine.
+			 * Easy to measure the small one and report it as the big one. */
+			if(_synth == "xtve")
+				params.customData |= 1;
 			return std::make_unique<xt::Device>(params);
 		}
 #endif
@@ -150,7 +155,7 @@ int main(int _argc, char* _argv[])
 {
 	if(_argc < 2)
 	{
-		fprintf(stderr, "usage: %s <virus|virusA|virusB|virusTI|xt|mq|n2x> [rom] [seconds] [voices] [dspClockPercent] [repeats]\n"
+		fprintf(stderr, "usage: %s <virus|virusA|virusB|virusTI|xt|xtve|mq|n2x> [rom] [seconds] [voices] [dspClockPercent] [repeats]\n"
 		                "  virus takes a ROM path; xt/mq/n2x find theirs in the current directory\n", _argv[0]);
 		return 1;
 	}

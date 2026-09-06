@@ -72,7 +72,19 @@ namespace jeJucePlugin
 		/* iOS cannot JIT, so the ESP cores are interpreted (~15x the cost) and
 		 * one thread renders at a fraction of real time -- silence and a pegged
 		 * DSP meter. The four-stage pipeline is what makes it playable, and the
-		 * AUv3 has no reachable settings page, so it is the DEFAULT here. */
+		 * AUv3 has no reachable settings page, so it is the DEFAULT here.
+		 *
+		 * FOUR, not the performance-core count. Deriving it from
+		 * hw.perflevel0.physicalcpu was tried and is WORSE: it gives an M5 iPad
+		 * three stages, and three stages could no longer hold two simultaneous
+		 * instances that four handled cleanly. So the efficiency cores are
+		 * carrying real work here, and "keep every stage on a P-core" is the
+		 * wrong model -- the extra parallelism is worth more than the E-core
+		 * stage costs.
+		 *
+		 * It did not rescue the iPhone either: an A17 Pro fails at two stages
+		 * AND at four, so whatever stops it is not the stage count. Do not
+		 * re-derive this default from core counts without measuring both. */
 		constexpr int defaultDspThreads = 4;
 #else
 		constexpr int defaultDspThreads = 0;
