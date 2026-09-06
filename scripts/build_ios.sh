@@ -20,7 +20,22 @@ BUILD_DIR="build-ios"
 [[ "$MODE" == "device" ]] && BUILD_DIR="build-ios-device"
 EXTRA_BUILD_ARGS=()
 
+# Profile-guided optimisation for the interpreted ESP. Worth +45% serial and
+# +50% PIPELINED, bit-exact, which on iOS is the difference between one instance
+# and two -- the interpreter is a big switch in a hot loop, exactly PGO's shape.
+# A macOS/arm64 profile applies to an iOS/arm64 build: clang profiles key on
+# function names and counter indices, not on the target. See pgo/README.md.
+REPO="$(pwd)"
+PGO_FLAGS=""
+if [[ -f "$REPO/pgo/je8086.profdata" ]]; then
+  PGO_FLAGS="-fprofile-use=$REPO/pgo/je8086.profdata -Wno-profile-instr-out-of-date -Wno-profile-instr-unprofiled"
+  echo "==> Using PGO profile pgo/je8086.profdata"
+else
+  echo "==> WARNING: no pgo/je8086.profdata -- building WITHOUT PGO, which costs ~50% of the pipelined throughput"
+fi
+
 COMMON_ARGS=(
+  -DCMAKE_CXX_FLAGS="$PGO_FLAGS"
   -S .
   -B "$BUILD_DIR"
   -G Xcode
