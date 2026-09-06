@@ -266,7 +266,10 @@ namespace jeLib
 	{
 		struct Handoff { int32_t gram[HandoffCount]; };
 		struct Audio { int32_t left, right; };
-		struct UcWrite { uint8_t asic, val; uint16_t addr; uint32_t sample; };
+		/* sample is int64: it is compared against the stage's own sample counter,
+		 * and a uint32 at 88.2 kHz wraps after 13.5 hours -- after which forwarded
+		 * register writes are applied at the wrong time, or never. */
+		struct UcWrite { uint8_t asic, val; uint16_t addr; int64_t sample; };
 
 		struct Stage
 		{
@@ -399,11 +402,23 @@ namespace jeLib
 				auto& st = impl2.stage[s];
 				if (_asic < st.lo || _asic >= st.hi)
 					continue;
-				const int wi = st.ucWrite.load(std::memory_order_relaxed) % UcRingCap;
-				st.ucRing[wi] = { static_cast<uint8_t>(_asic), _val, static_cast<uint16_t>(_addr),
-				                  static_cast<uint32_t>(impl2.stage[0].samplesProduced.load(std::memory_order_relaxed)) };
-				st.ucWrite.store((st.ucWrite.load(std::memory_order_relaxed) + 1) % UcRingCap,
-				                 std::memory_order_release);
+				/* Wait for room rather than wrapping over unconsumed writes. The
+				 * counters are stored modulo the capacity, so a producer that laps
+				 * the consumer makes ucWrite == ucRead, which reads as EMPTY: a
+				 * full ring silently discarded every pending write instead of
+				 * overwriting the oldest. These carry PATCH PROGRAMMING -- the H8S
+				 * pushes ~4 writes per program word, and a performance load
+				 * programs two patches across the ASICs at once, while the
+				 * receiving stage may be stalled behind a full audio ring. Losing
+				 * them corrupts the program on one ASIC, intermittently and
+				 * unattributably. */
+				const int w = st.ucWrite.load(std::memory_order_relaxed);
+				if (!spinWait([&] { return (w + 1) % UcRingCap != st.ucRead.load(std::memory_order_acquire); },
+				              [&] { return impl2.shutdown.load(std::memory_order_relaxed); }))
+					break;
+				st.ucRing[w] = { static_cast<uint8_t>(_asic), _val, static_cast<uint16_t>(_addr),
+				                 impl2.stage[0].samplesProduced.load(std::memory_order_relaxed) };
+				st.ucWrite.store((w + 1) % UcRingCap, std::memory_order_release);
 				break;
 			}
 		};
@@ -494,7 +509,7 @@ namespace jeLib
 		st.ready.store(true, std::memory_order_release);
 
 		auto& asics = m_je.getAsics();
-		uint32_t sample = 0;
+		int64_t sample = 0;
 		uint32_t seenSchedule = 0;
 		uint32_t seenWorkgroup = 0;
 
@@ -506,7 +521,7 @@ namespace jeLib
 			 * published this sample, so forwarded register writes stamped with it
 			 * have all arrived. */
 			if (!spinWait([&] { return Impl::avail(st.gramWrite, st.gramRead) >= 1 &&
-			                           prev.samplesProduced.load(std::memory_order_acquire) > static_cast<int64_t>(sample); },
+			                           prev.samplesProduced.load(std::memory_order_acquire) > sample; },
 			              [&] { return impl.shutdown.load(std::memory_order_relaxed); }))
 				break;
 
