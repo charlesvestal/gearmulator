@@ -19,6 +19,45 @@
 
 constexpr int PRAM_SIZE = 768;
 
+/* Can this process map an executable page at all? iOS refuses without the
+ * dynamic-codesigning entitlement, so a JIT-capable binary still has to be able
+ * to fall back -- and asmjit reports the refusal by THROWING out of JitRuntime::
+ * add(), which on the boot thread is a crash rather than a fallback. Probe once
+ * with a trivial function so the decision is made before any of that.
+ *
+ * A dev-signed build with a debugger attached gets CS_DEBUGGED and this returns
+ * true; the same binary launched normally returns false and interprets. */
+inline bool espJitAvailable()
+{
+	static const bool ok = []
+	{
+		try
+		{
+			asmjit::JitRuntime rt;
+			asmjit::CodeHolder code;
+			if (code.init(rt.environment(), rt.cpuFeatures()) != asmjit::kErrorOk)
+				return false;
+#if defined(__aarch64__) || defined(_M_ARM64)
+			asmjit::a64::Assembler a(&code);
+			a.ret(asmjit::a64::x30);
+#else
+			asmjit::x86::Assembler a(&code);
+			a.ret();
+#endif
+			void* fn = nullptr;
+			if (rt.add(&fn, &code) != asmjit::kErrorOk || !fn)
+				return false;
+			rt.release(fn);
+			return true;
+		}
+		catch (...)
+		{
+			return false;
+		}
+	}();
+	return ok;
+}
+
 /* JE_GENLOG=1 traces JIT recompiles on stderr. Read once: this is consulted
  * from genProgram(), which runs on the render thread. */
 inline bool espGenLog() { static const bool on = getenv("JE_GENLOG") != nullptr; return on; }

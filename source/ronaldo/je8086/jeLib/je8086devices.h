@@ -144,7 +144,19 @@ namespace jeLib
 			 * there is no choice to make, and no runtime check in the sample loop. */
 			return true;
 #else
-			static const bool v = [] { const char* e = ::getenv("JE_ESP_INTERP"); return e && *e != '0'; }();
+			static const bool v = [] {
+				const char* e = ::getenv("JE_ESP_INTERP");
+				if (e && *e != '0')
+					return true;
+				/* A JIT-capable build still interprets where the platform will
+				 * not hand out an executable page. One binary, both platforms. */
+				if (!espJitAvailable())
+				{
+					fprintf(stderr, "[je] no executable pages available, running the ESP interpreted\n");
+					return true;
+				}
+				return false;
+			}();
 			return v;
 #endif
 		}
