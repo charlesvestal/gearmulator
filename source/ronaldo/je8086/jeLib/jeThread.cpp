@@ -94,6 +94,26 @@ namespace jeLib
 					std::make_move_iterator(job.midiEvents.end()));
 			}
 
+			/* Bound the backlog, and RECOVER rather than run away.
+			 *
+			 * The engine's capacity is not a constant: it swings between roughly
+			 * 0.9x and 1.5x as the device heats and cools. Every sample queued
+			 * while it is below 1.0x is stale audio that must still be rendered,
+			 * so an unbounded backlog means that even when capacity comes back
+			 * above 1.0x it is spent working off history and never catches up --
+			 * one thermal dip turns into permanent crackle. Measured in AUM at
+			 * 35515 and 57389 samples of carry with the ring pinned empty.
+			 *
+			 * Past a threshold the honest thing is to drop the backlog and render
+			 * NOW: one audible discontinuity, then a clean stream that the next
+			 * good period can refill. MIDI is kept -- dropping note-offs would
+			 * leave the synth stuck on. */
+			if (m_carry.samplesToProcess > m_maxCarrySamples)
+			{
+				m_droppedSamples += m_carry.samplesToProcess - m_maxCarrySamples;
+				m_carry.samplesToProcess = m_maxCarrySamples;
+			}
+
 			if (!m_pendingJobs.full())
 			{
 				m_pendingJobs.push_back(std::move(m_carry));

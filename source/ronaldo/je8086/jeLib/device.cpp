@@ -42,6 +42,14 @@ namespace
 		va_end(args);
 		fputc('\n', f);
 		fflush(f);
+
+		/* Also to stderr, so a run whose file never gets copied off the device
+		 * still leaves its numbers in the console capture. Losing a 25-minute
+		 * soak to a missed copy step is not a mistake worth making twice. */
+		va_start(args, _fmt);
+		vfprintf(stderr, _fmt, args);
+		va_end(args);
+		fputc('\n', stderr);
 	}
 #else
 	inline void jeDiag(const char*, ...) {}
@@ -386,13 +394,13 @@ namespace jeLib
 				const double nsPerSample = m_thread->takeNsPerSample();
 				const auto produced = static_cast<int64_t>(m_diagRequested)
 				                    + static_cast<int64_t>(availAfter) - static_cast<int64_t>(m_diagAvailMark);
-				jeDiag("[je] %.2fs: block %zu, host wanted %llu/s, engine made %lld/s (%.2fx of demand), ring min %zu now %zu, peak %.4f, underrun %llu, lat %u/%u, pending %zu, carry %u, %.0f ns/sample (%.2fx capacity), thermal %ld",
+				jeDiag("[je] %.2fs: block %zu, host wanted %llu/s, engine made %lld/s (%.2fx of demand), ring min %zu now %zu, peak %.4f, underrun %llu, lat %u/%u, pending %zu, carry %u, dropped %llu, %.0f ns/sample (%.2fx capacity), thermal %ld",
 				       secs, _samples,
 				       (unsigned long long)(static_cast<double>(m_diagRequested) / secs),
 				       (long long)(static_cast<double>(produced) / secs),
 				       m_diagRequested ? static_cast<double>(produced) / static_cast<double>(m_diagRequested) : 0.0,
 				       m_diagMinAvail, availAfter, m_diagPeak, (unsigned long long)m_diagUnderrun,
-				       m_thread->getCurrentLatency(), getExtraLatencySamples(), m_thread->getPendingJobs(), m_thread->getCarry(),
+				       m_thread->getCurrentLatency(), getExtraLatencySamples(), m_thread->getPendingJobs(), m_thread->getCarry(), (unsigned long long)m_thread->getDropped(),
 				       nsPerSample, nsPerSample > 0.0 ? (1e9 / getSamplerate()) / nsPerSample : 0.0, jeThermalState());
 				m_diagT0 = now;
 				m_diagAvailMark = availAfter;

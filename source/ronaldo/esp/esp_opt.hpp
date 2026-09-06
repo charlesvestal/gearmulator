@@ -4,6 +4,10 @@
 #include <cstdio>
 #include <sstream>
 
+#if defined(__APPLE__)
+#include <TargetConditionals.h>
+#endif
+
 /* JE_ESP_NO_JIT: built for a platform that will not map an executable page
  * (iOS/iPadOS). asmjit and the two emitters are not compiled at all, and
  * ESPOptimizer below becomes a stub -- ESP::step_cores() runs the program
@@ -31,6 +35,20 @@ inline bool espJitAvailable()
 {
 	static const bool ok = []
 	{
+#if defined(__APPLE__)
+		/* iOS lets asmjit MAP an executable page -- the mapping succeeds and this
+		 * probe used to report the JIT as available -- and then kills the process
+		 * with SIGKILL the moment it EXECUTES unsigned code. Measured: the JIT
+		 * build dies within seconds of boot, while the same binary with
+		 * JE_ESP_INTERP=1 runs indefinitely.
+		 *
+		 * The probe cannot discover this by trying, because trying is what gets
+		 * the process killed. So iOS is opt-in only: a dev-signed build under a
+		 * debugger gets CS_DEBUGGED and can execute, and JE_FORCE_JIT=1 says so
+		 * explicitly. Everything else interprets. */
+		if (TARGET_OS_IPHONE)
+			return ::getenv("JE_FORCE_JIT") != nullptr;
+#endif
 		try
 		{
 			asmjit::JitRuntime rt;

@@ -32,6 +32,7 @@ namespace jeLib
 		uint32_t getCurrentLatency() const { return m_currentLatency; }
 		size_t getPendingJobs() const { return m_pendingJobs.size(); }
 		uint32_t getCarry() const { return m_hasCarry ? m_carry.samplesToProcess : 0; }
+		uint64_t getDropped() const { return m_droppedSamples; }
 
 		/* ns of engine time per rendered sample, since the last call. 11337 ns is
 		 * exactly real time at 88.2 kHz, so below that is headroom and above it
@@ -76,6 +77,11 @@ namespace jeLib
 
 		ProcessJob m_carry;
 		bool m_hasCarry = false;
+		/* One host block or so of slack before we stop hoarding stale audio.
+		 * Large enough that ordinary jitter is absorbed, small enough that a
+		 * recovery costs a single discontinuity rather than seconds of lag. */
+		uint32_t m_maxCarrySamples = 4096;
+		uint64_t m_droppedSamples = 0;
 
 		std::vector<ProcessJob> m_jobPool;
 		dsp56k::RingBuffer<ProcessJob, 32, true> m_pendingJobs;
