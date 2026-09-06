@@ -2,13 +2,20 @@
 #include <time.h>
 #include <cstdlib>
 #include <cstdio>
+#include <sstream>
+
+/* JE_ESP_NO_JIT: built for a platform that will not map an executable page
+ * (iOS/iPadOS). asmjit and the two emitters are not compiled at all, and
+ * ESPOptimizer below becomes a stub -- ESP::step_cores() runs the program
+ * instead (see jeEspInterp() in je8086devices.h). */
+#ifndef JE_ESP_NO_JIT
 #include <asmjit/asmjit.h>
 #include <asmjit/a64.h>
-#include <sstream>
 
 #include "esp_jit_x64.h"
 #include "esp_jit_arm64.h"
 #include "esp_jit_types.h"
+#endif
 
 constexpr int PRAM_SIZE = 768;
 
@@ -191,6 +198,24 @@ struct ESPOptInstr
 		}
 	}
 };
+
+#ifdef JE_ESP_NO_JIT
+
+/* No-JIT stub. The five entry points the emulator calls, all no-ops: with the
+ * interpreter there is no generated code to compile, release or invoke. */
+template<int lg2eram_size>
+class ESPOptimizer
+{
+public:
+  explicit ESPOptimizer(ESP<lg2eram_size>*) {}
+  void genProgram(ESP<lg2eram_size>*, uint32_t = 3) {}
+  void genProgramIfDirty() {}
+  void setProgramDirty(uint32_t = 3) { ++g_esp_dirty_count; }
+  void updateCoef(ESP<lg2eram_size>*) {}
+  void callOptimized(ESP<lg2eram_size>*) {}
+};
+
+#else
 
 template<int lg2eram_size>
 class ESPOptimizer
@@ -689,3 +714,5 @@ private:
   };
   CoreEmitter coreEmitter0, coreEmitter1;
 };
+
+#endif // JE_ESP_NO_JIT

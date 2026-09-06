@@ -133,6 +133,27 @@ namespace jeLib
 		 * The 2->3 boundary also carries 0xa0/0xa2 -> 0x20/0x22, packed as words 8, 9
 		 * of the handoff payload (JE_HANDOFF_MAX). */
 		inline constexpr int g_je_handoff_words[3] = {3, 6, 8};
+		/* JIT-free execution of the ESP cores. The generated code is the only
+		 * thing in this emulator that needs an executable page, so a platform
+		 * that forbids one (iOS/iPadOS) needs the original interpreter --
+		 * ESP::step_cores(), 768 program words per core per sample, which the
+		 * JIT was derived from and which nothing else calls. JE_ESP_INTERP=1. */
+		inline bool jeEspInterp() {
+#ifdef JE_ESP_NO_JIT
+			/* Built for a platform that cannot map an executable page (iOS/iPadOS):
+			 * there is no choice to make, and no runtime check in the sample loop. */
+			return true;
+#else
+			static const bool v = [] { const char* e = ::getenv("JE_ESP_INTERP"); return e && *e != '0'; }();
+			return v;
+#endif
+		}
+		template<typename Asic> inline void jeRunAsicSample(Asic& a) {
+			if (jeEspInterp()) { a.run_cores(); return; }
+			a.opt.genProgramIfDirty();
+			a.opt.callOptimized(&a);
+		}
+
 		inline constexpr int JE_HANDOFF_MAX = 10;
 		/* Mode 1: called per sample with ASIC(split-1)'s handoff values
 		 * (g_je_handoff_words[split-1] of them). */
@@ -225,6 +246,10 @@ namespace jeLib
 				});
 			}
 			void runAsics(int first, int last) {
+				if (jeEspInterp()) {
+					for (int i = first; i < last; i++) forAsic(i, [](auto& a) { jeRunAsicSample(a); });
+					return;
+				}
 				for (int i = first; i < last; i++) forAsic(i, [](auto& a) { a.opt.genProgramIfDirty(); });
 				for (int i = first; i < last; i++) forAsic(i, [](auto& a) { a.opt.callOptimized(&a); });
 			}
@@ -262,11 +287,15 @@ namespace jeLib
 					g_je_gram_produce(gram);
 				}
 
-				// 3. Consume new GRAM from the previous stage (the lo-1 -> lo handoff)
+				// 3. Consume new GRAM from the previous stage (the lo-1 -> lo handoff).
+				//    A stage starting at ASIC0 has no such boundary: nothing feeds
+				//    ASIC0 by GRAM, the H8S writes its registers directly (and those
+				//    writes are forwarded here). The token is still consumed -- it is
+				//    what paces this stage against the H8S.
 				if (g_je_gram_consume) {
 					int32_t gram[JE_HANDOFF_MAX];
 					if (!g_je_gram_consume(gram)) return false;
-					writeHandoff(lo, gram);
+					if (lo > 0) writeHandoff(lo, gram);
 				}
 
 				// 4. Remaining handoffs inside this stage (for next sample)
@@ -345,6 +374,12 @@ namespace jeLib
 						// Original serial path — preserved exactly.
 						// All 4 ASICs run with GRAM from previous sample,
 						// then GRAM handoff writes values for next sample.
+						if (jeEspInterp()) {
+							jeRunAsicSample(asic0);
+							jeRunAsicSample(asic1);
+							jeRunAsicSample(asic2);
+							jeRunAsicSample(asic3);
+						} else {
 						asic0.opt.genProgramIfDirty();
 						asic1.opt.genProgramIfDirty();
 						asic2.opt.genProgramIfDirty();
@@ -354,6 +389,7 @@ namespace jeLib
 						asic1.opt.callOptimized(&asic1);
 						asic2.opt.callOptimized(&asic2);
 						asic3.opt.callOptimized(&asic3);
+						}
 
 						emitAudio(asic3.readGRAM(0xe8), asic3.readGRAM(0xec));
 
@@ -380,8 +416,11 @@ namespace jeLib
 						for (int b = 0; b < split - 1; b++) handoff(b);
 						// Read the last parent ASIC's outputs PRE-sync (same point as serial mode 0)
 						if (g_je_gram_produce) {
-							int32_t gram[JE_HANDOFF_MAX];
-							readHandoff(split - 1, gram);
+							int32_t gram[JE_HANDOFF_MAX] = {};
+							// split == 0 is the H8S on a stage of its own, with ASIC0
+							// on the next one. It owns no ASIC to read a handoff from,
+							// so what it publishes is a pure sample clock.
+							if (split > 0) readHandoff(split - 1, gram);
 							g_je_gram_produce(gram);
 						}
 						syncAsics(0, split);
