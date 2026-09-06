@@ -13,6 +13,12 @@
 
 #include "synthLib/deviceException.h"
 
+#if JUCE_IOS
+#include <algorithm>
+#include <sys/sysctl.h>
+#include "baseLib/logging.h"
+#endif
+
 namespace jeJucePlugin
 {
 	class Controller;
@@ -71,9 +77,28 @@ namespace jeJucePlugin
 #if JUCE_IOS
 		/* iOS cannot JIT, so the ESP cores are interpreted (~15x the cost) and
 		 * one thread renders at a fraction of real time -- silence and a pegged
-		 * DSP meter. The four-stage pipeline is what makes it playable, and the
-		 * AUv3 has no reachable settings page, so it is the DEFAULT here. */
-		constexpr int defaultDspThreads = 4;
+		 * DSP meter. The pipeline is what makes it playable, and the AUv3 has no
+		 * reachable settings page, so the count has to be right by DEFAULT.
+		 *
+		 * It must come from the hardware, not from a constant. A pipeline runs
+		 * at the speed of its SLOWEST stage, so a stage that lands on an
+		 * efficiency core throttles every other stage behind it. Four stages was
+		 * chosen on an M5 iPad (3 performance cores); the same binary on an
+		 * iPhone 15 Pro, whose A17 Pro has 2, puts half the pipeline on E-cores
+		 * and does not run at all. Fewer stages entirely on P-cores beats more
+		 * stages straddling both.
+		 *
+		 * hw.perflevel0 is the performance cluster on every Apple silicon part;
+		 * a device that does not report it (or is not heterogeneous) falls back
+		 * to 2, which is the smallest split that still beats serial. */
+		int defaultDspThreads = 2;
+		{
+			uint32_t perfCores = 0;
+			size_t sz = sizeof(perfCores);
+			if(sysctlbyname("hw.perflevel0.physicalcpu", &perfCores, &sz, nullptr, 0) == 0 && perfCores > 1)
+				defaultDspThreads = static_cast<int>(std::min<uint32_t>(perfCores, 4));
+			LOG("iOS: " << perfCores << " performance cores, defaulting to " << defaultDspThreads << " pipeline stages");
+		}
 #else
 		constexpr int defaultDspThreads = 0;
 #endif
