@@ -41,12 +41,36 @@ namespace jeJucePlugin
 		}
 
 		getController();
-		const auto latencyBlocks = getConfig().getIntValue("latencyBlocks", static_cast<int>(getPlugin().getLatencyBlocks()));
+#if JUCE_IOS
+		/* The engine may run ahead of the host by latencyBlocks host blocks, and
+		 * the default of 1 gives a four-stage pipeline no runway at all: AUM
+		 * calls us with 58-sample blocks, so the stages are interrupted and
+		 * resynchronised 750 times a second and never reach steady state. The
+		 * same session at a 2048-sample buffer drops from a pegged DSP meter to
+		 * 25%, which is the runway talking, not the engine's speed.
+		 *
+		 * 8 blocks is ~2048 samples at the 256 a Bluetooth output forces on us.
+		 * It should be computed from the block size once that is known rather
+		 * than assumed here. */
+		const auto defaultLatencyBlocks = 8;
+#else
+		const auto defaultLatencyBlocks = static_cast<int>(getPlugin().getLatencyBlocks());
+#endif
+		const auto latencyBlocks = getConfig().getIntValue("latencyBlocks", defaultLatencyBlocks);
 		Processor::setLatencyBlocks(latencyBlocks);
 
 		/* Read before the device exists: the thread count is applied at creation
 		 * because it fixes the reported latency and cannot change while running. */
-		pluginLib::Processor::setDspThreads(static_cast<uint32_t>(getConfig().getIntValue("dspThreads", 0)));
+#if JUCE_IOS
+		/* iOS cannot JIT, so the ESP cores are interpreted (~15x the cost) and
+		 * one thread renders at a fraction of real time -- silence and a pegged
+		 * DSP meter. The four-stage pipeline is what makes it playable, and the
+		 * AUv3 has no reachable settings page, so it is the DEFAULT here. */
+		constexpr int defaultDspThreads = 4;
+#else
+		constexpr int defaultDspThreads = 0;
+#endif
+		pluginLib::Processor::setDspThreads(static_cast<uint32_t>(getConfig().getIntValue("dspThreads", defaultDspThreads)));
 	}
 
 	AudioPluginAudioProcessor::~AudioPluginAudioProcessor()

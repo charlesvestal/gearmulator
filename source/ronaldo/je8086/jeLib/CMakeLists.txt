@@ -31,3 +31,8 @@ target_include_directories(jeLib PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/..)
 
 #target_compile_options(jeLib PRIVATE -fsanitize=thread)
 #target_link_options(jeLib PUBLIC -fsanitize=thread)
+
+# jeDiag()'s thermal-state probe reaches NSProcessInfo through the ObjC runtime.
+if(APPLE)
+	target_link_libraries(jeLib PRIVATE objc)
+endif()

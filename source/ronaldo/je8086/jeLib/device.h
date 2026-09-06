@@ -1,5 +1,7 @@
 #pragma once
 
+#include <chrono>
+
 #include <memory>
 
 #include "state.h"
@@ -73,5 +75,14 @@ namespace jeLib
 		baseLib::EventListener<uint32_t, bool> m_buttonChangedListener;
 
 		float m_masterVolume = 12.0f;
+
+		// iOS diagnostics, see processAudio()
+		std::chrono::steady_clock::time_point m_diagT0{};
+		uint64_t m_diagRequested = 0, m_diagCalls = 0, m_diagUnderrun = 0;
+		size_t m_diagAvailMark = 0;
+		float m_diagPeak = 0.0f;
+		size_t m_diagMinAvail = ~size_t(0);
+		uint64_t m_selfTestSamples = 0;
+		bool m_selfTestDone = false;
 	};
 }
