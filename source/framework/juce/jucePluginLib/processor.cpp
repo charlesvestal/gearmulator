@@ -470,7 +470,12 @@ namespace pluginLib
 
 	bool Processor::setDspThreads(const uint32_t _threads)
 	{
-		if(_threads > getMaxDspThreads())
+		/* getMaxDspThreads() answers 1 while there is no device, and the
+		 * documented time to set this is BEFORE the device exists -- the count
+		 * is applied at creation because it fixes the reported latency. Clamping
+		 * against the placeholder rejected every value above 1 and left the
+		 * setting at 0, i.e. serial, whatever the config or the default said. */
+		if(m_device && _threads > getMaxDspThreads())
 			return false;
 		m_dspThreads = _threads;
 		return true;
