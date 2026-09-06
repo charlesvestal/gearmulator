@@ -215,7 +215,12 @@ namespace jeLib
 			static const uint32_t s_spins = []
 			{
 				const char* e = getenv("JE_PIPELINE_SPINS");
-				return e ? static_cast<uint32_t>(atoi(e)) : 4096u;
+				if (e) return static_cast<uint32_t>(atoi(e));
+#ifdef __APPLE__
+				return 256u;
+#else
+				return 4096u;
+#endif
 			}();
 			static const uint32_t s_yields = []
 			{
@@ -224,8 +229,18 @@ namespace jeLib
 			}();
 			static const uint32_t s_sleepNs = []
 			{
+				/* Sleep, do not yield, on Apple: a yielding thread stays runnable, so
+				 * four of them look like four cores of demand on a cluster with
+				 * three, and the power controller answers by dropping the clock.
+				 * A sleeping thread accrues no runnable time. Viable only with the
+				 * enlarged pipeline window -- see g_pipelineDelaySamples. */
 				const char* e = getenv("JE_PIPELINE_SLEEP_NS");
-				return e ? static_cast<uint32_t>(atoi(e)) : 5'000u;
+				if (e) return static_cast<uint32_t>(atoi(e));
+#ifdef __APPLE__
+				return 100'000u;
+#else
+				return 5'000u;
+#endif
 			}();
 
 			uint32_t spins = 0;
@@ -236,10 +251,12 @@ namespace jeLib
 				{
 					cpuRelax();
 				}
+#ifndef __APPLE__
 				else if (spins < s_spins + s_yields)
 				{
 					std::this_thread::yield();
 				}
+#endif
 				else if (s_sleepNs)
 				{
 					timespec ts{0, static_cast<long>(s_sleepNs)};

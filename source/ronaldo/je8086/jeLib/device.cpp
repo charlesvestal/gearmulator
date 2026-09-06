@@ -85,7 +85,17 @@ namespace jeLib
 	/* The pipeline hands one sample over for every sample rendered, taken this
 	 * many samples late. It only has to cover what is in flight; two is enough,
 	 * and a constant delay is what makes the output bit-exact against serial. */
-	static constexpr int64_t g_pipelineDelaySamples = 2;
+	/* How far the pipeline is allowed to run ahead, in samples. Two is enough to
+	 * cover what is in flight and was chosen for that alone -- but it also caps
+	 * how long a stage may be away before it stalls the pipeline, and 2 samples
+	 * is 23 us at 88.2 kHz. That is why a 100 us worker sleep (which lets the
+	 * scheduler see our true demand instead of four yield-spinning threads)
+	 * collapsed to 0.109x: the window cannot absorb a sleep nine samples long.
+	 *
+	 * Measured on a Mac with the sleep policy, all outputs byte-identical to the
+	 * serial reference: delay 2 = 0.109x, 16 = 0.617x, 32 = 1.027x, 64 = 1.312x.
+	 * 64 samples is 0.73 ms of internal delay. */
+	static constexpr int64_t g_pipelineDelaySamples = 64;
 
 	constexpr uint8_t g_paramPageMasterVolume = 6;
 	constexpr uint8_t g_paramIndexMasterVolume = 0;
