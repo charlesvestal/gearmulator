@@ -58,13 +58,14 @@ namespace
 		params.hostSamplerate = 48000.0f;
 
 #if BENCH_HAS_VIRUS
-		if(_synth == "virus" || _synth == "virusA" || _synth == "virusB")
+		if(_synth == "virus" || _synth == "virusA" || _synth == "virusB" || _synth == "virusTI")
 		{
 			/* Virus A firmware is a PAIR of .mid files, not a .bin, so it can
 			 * only be loaded through ROMLoader -- which is also what picks the
 			 * model out of the files. Naming a .bin keeps the direct path. */
-			const auto model = _synth == "virusA" ? virusLib::DeviceModel::A
-			                 : _synth == "virusB" ? virusLib::DeviceModel::B
+			const auto model = _synth == "virusA"  ? virusLib::DeviceModel::A
+			                 : _synth == "virusB"  ? virusLib::DeviceModel::B
+			                 : _synth == "virusTI" ? virusLib::DeviceModel::TI2
 			                 : virusLib::DeviceModel::C;
 
 			if(_rom.empty())
@@ -149,7 +150,7 @@ int main(int _argc, char* _argv[])
 {
 	if(_argc < 2)
 	{
-		fprintf(stderr, "usage: %s <virus|virusA|virusB|xt|mq|n2x> [rom] [seconds] [voices] [dspClockPercent] [repeats]\n"
+		fprintf(stderr, "usage: %s <virus|virusA|virusB|virusTI|xt|mq|n2x> [rom] [seconds] [voices] [dspClockPercent] [repeats]\n"
 		                "  virus takes a ROM path; xt/mq/n2x find theirs in the current directory\n", _argv[0]);
 		return 1;
 	}
