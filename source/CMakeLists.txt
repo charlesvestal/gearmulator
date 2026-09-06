@@ -106,7 +106,6 @@ if(${CMAKE_PROJECT_NAME}_SYNTH_OSIRUS OR ${CMAKE_PROJECT_NAME}_SYNTH_OSTIRUS)
 	add_subdirectory(axel/virusLib EXCLUDE_FROM_ALL)
 	add_subdirectory(axel/virusConsoleLib EXCLUDE_FROM_ALL)
 	add_subdirectory(axel/virusTestConsole)
-	add_subdirectory(axel/virusBench EXCLUDE_FROM_ALL)
 	add_subdirectory(axel/virusIntegrationTest)
 	add_subdirectory(axel/virusRomHashTest)
 	if(${CMAKE_PROJECT_NAME}_BUILD_JUCEPLUGIN)
@@ -165,3 +164,7 @@ add_subdirectory(claudia)
 # ----------------- all ronaldos
 
 add_subdirectory(ronaldo)
+
+# ----------------- Cross-synth DSP56300 benchmark
+# Last, so it can link whichever synth libs the options above actually defined.
+add_subdirectory(framework/tools/dsp56kBench EXCLUDE_FROM_ALL)
