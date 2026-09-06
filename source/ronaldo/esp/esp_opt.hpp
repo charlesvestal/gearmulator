@@ -49,6 +49,13 @@ inline bool espJitAvailable()
 		if (TARGET_OS_IPHONE)
 			return ::getenv("JE_FORCE_JIT") != nullptr;
 #endif
+#ifdef JE_ESP_NO_JIT
+		/* No emitter was compiled in and asmjit was not even linked, so there
+		 * is nothing to probe. Without this the probe below still has to
+		 * COMPILE, and a from-clean no-JIT build fails on every asmjit name in
+		 * it -- which is the configuration iOS always uses. */
+		return false;
+#else
 		try
 		{
 			asmjit::JitRuntime rt;
@@ -72,6 +79,7 @@ inline bool espJitAvailable()
 		{
 			return false;
 		}
+#endif
 	}();
 	return ok;
 }
