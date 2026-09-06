@@ -353,6 +353,21 @@ public:
 			accB.storePipeline();
 			return;
 		}
+		/* Two ideas measured and closed here, so they are not re-derived:
+		 *
+		 * Predecoding op/mem/shiftbits/coef into a per-pc table -- the front half
+		 * of an "IR interpreter" -- measures 0.50x -> 0.48x. These are four ALU
+		 * ops on a word already in a register; a table turns them into a load
+		 * that competes for cache.
+		 *
+		 * Ahead-of-time compiling the programs (the ARM64 emitter is
+		 * coefficient-parameterised, so generated code depends on structure
+		 * alone, and shipping compiled code is legal where mapping it is not)
+		 * needs the set of distinct structures to be closed. It is not: masking
+		 * out the coef/shift bits that updateCoef() reloads at runtime, a census
+		 * counts 5576 distinct programs over 8 factory patches and 16326 over 32
+		 * -- about 500 per patch, growing linearly. The H8S rewrites program
+		 * structure continuously, not just coefficients. */
 		const uint8_t op = (instr >> 16) & 0x7c;
 		const uint8_t mem = (instr >> 10) & 0xff;
 		const uint8_t shiftbits = (instr >> 8) & 3;
