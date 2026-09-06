@@ -43,13 +43,20 @@ set(SOURCES
 	rmlTree.cpp rmlTree.h
 	rmlTreeNode.cpp rmlTreeNode.h
 
-	RmlUi_Renderer_GL2.cpp RmlUi_Renderer_GL2.h
-	RmlUi_Renderer_GL3.cpp RmlUi_Renderer_GL3.h
+	RmlUi_Renderer_GL2.h
+	RmlUi_Renderer_GL3.h
 	RmlUi_Renderer_Metal.h
 	MetalContext.h
 )
 
-if(APPLE)
+# The Metal path embeds an NSView (AppKit) -- macOS only. iOS falls back to the
+# OpenGL ES / software renderers, both of which are already the non-Apple path.
+# Desktop OpenGL renderers: everywhere but iOS, which has GL ES only.
+if(NOT IOS)
+	list(APPEND SOURCES RmlUi_Renderer_GL2.cpp RmlUi_Renderer_GL3.cpp)
+endif()
+
+if(APPLE AND NOT IOS)
 	list(APPEND SOURCES
 		RmlUi_Renderer_Metal.mm
 		MetalContext.mm
@@ -66,9 +73,12 @@ target_link_libraries(juceRmlUi PUBLIC baseLib dsp56kBase rmlui_core rmlui_debug
 target_include_directories(juceRmlUi PUBLIC ${JUCE_MODULES_DIR})
 target_compile_definitions(juceRmlUi PRIVATE JUCE_GLOBAL_MODULE_SETTINGS_INCLUDED=1)
 
-if(APPLE)
+# APPLE is also true for iOS, where forcing JUCE_MAC=1 makes juce_TargetPlatform
+# reject the build ("Building for OSX 10.8 and earlier is no longer supported")
+# because the iOS SDK defines no MAC_OS_X_VERSION_MIN_REQUIRED.
+if(APPLE AND NOT IOS)
 	target_compile_definitions(juceRmlUi PRIVATE JUCE_MAC=1)
-else()
+elseif(NOT APPLE)
 	target_compile_definitions(juceRmlUi PRIVATE JUCE_MAC=0)
 endif()
 
@@ -103,7 +113,11 @@ set_property(TARGET juceRmlUi PROPERTY FOLDER "Gearmulator")
 
 target_compile_definitions(juceRmlUi PUBLIC RMLUI_GL3_CUSTOM_LOADER="juce_opengl/juce_opengl.h")
 
-if(APPLE)
+if(IOS)
+	target_compile_definitions(juceRmlUi PUBLIC JUCERMLUI_NO_GL_RENDERERS=1)
+endif()
+
+if(APPLE AND NOT IOS)
 	find_library(METAL_FRAMEWORK Metal)
 	find_library(QUARTZCORE_FRAMEWORK QuartzCore)
 	if(METAL_FRAMEWORK AND QUARTZCORE_FRAMEWORK)

@@ -736,7 +736,7 @@ static GLuint CreateTexture(Rml::Span<const Rml::byte> source_data, Rml::Vector2
 	else if (source_data.size() == 3 * pixelCount)
 		glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB8, source_dimensions.x, source_dimensions.y, 0, GL_RGB, GL_UNSIGNED_BYTE, source_data.data());
 	else if (source_data.size() == pixelCount)
-		glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, source_dimensions.x, source_dimensions.y, 0, GL_R, GL_UNSIGNED_BYTE, source_data.data());
+		glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, source_dimensions.x, source_dimensions.y, 0, GL_RED, GL_UNSIGNED_BYTE, source_data.data());
 	else
 	{
 		RMLUI_ASSERT(false && "unknown texture format");
@@ -754,7 +754,10 @@ static GLuint CreateTexture(Rml::Span<const Rml::byte> source_data, Rml::Vector2
 	{
 		glGenerateMipmap(GL_TEXTURE_2D);
 		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+#ifdef GL_TEXTURE_LOD_BIAS
+		// OpenGL ES has no per-texture LOD bias; the mipmaps are just not biased.
 		glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_LOD_BIAS, -0.3f);
+#endif
 	}
 
 	glBindTexture(GL_TEXTURE_2D, 0);

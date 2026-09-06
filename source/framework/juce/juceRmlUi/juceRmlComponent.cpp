@@ -10,8 +10,12 @@
 #include "rmlInterfaces.h"
 #include "rmlRendererJuce.h"
 
+/* The GL2/GL3 renderers are DESKTOP OpenGL. iOS has only GL ES, which lacks
+ * half of what they call, so that build renders in software instead. */
+#ifndef JUCERMLUI_NO_GL_RENDERERS
 #include "RmlUi_Renderer_GL2.h"
 #include "RmlUi_Renderer_GL3.h"
+#endif
 
 #ifdef RMLUI_METAL_RENDERER
 #include "RmlUi_Renderer_Metal.h"
@@ -86,8 +90,13 @@ namespace juceRmlUi
 
 		m_renderProxy.reset(new RendererProxy(m_coreInstance, m_dataProvider));
 
+#ifdef JUCERMLUI_NO_GL_RENDERERS
+		if (true)
+		{
+#else
 		if (_config.forceSoftwareRenderer == SoftwareRendererMode::ForceOn)
 		{
+#endif
 			m_renderInterface.reset(new RendererJuce(m_coreInstance));
 			m_renderType = Renderer::Software;
 			m_renderProxy->setRenderer(m_renderInterface.get(), g_renderConfigSoftware);
@@ -253,7 +262,9 @@ namespace juceRmlUi
 		if (version >= static_cast<int>(g_advancedRendererMinimumGLversion) && version < 60)
 		{
 			Rml::Log::Message(Rml::Log::LT_INFO, "Using OpenGL 3 renderer for RmlUi, version detected: %d.%d", major, minor);
+#ifndef JUCERMLUI_NO_GL_RENDERERS
 			m_renderInterface.reset(new RenderInterface_GL3(m_coreInstance));
+#endif
 			m_renderType = Renderer::Gl3;
 
 			if (!haveCustomFPS)
@@ -281,7 +292,9 @@ namespace juceRmlUi
 			Rml::Log::Message(Rml::Log::LT_INFO, "Using OpenGL 2 renderer for RmlUi, version detected: %d.%d, max texture size %d, NPOT supported %d", major, minor, maxSize, npotSupported ? 1 : 0);
 
 			m_renderProxy->setTextureParameters(static_cast<uint32_t>(maxSize), npotSupported);
+#ifndef JUCERMLUI_NO_GL_RENDERERS
 			m_renderInterface.reset(new RenderInterface_GL2(m_coreInstance));
+#endif
 			m_renderType = Renderer::Gl2;
 		}
 
@@ -327,8 +340,16 @@ namespace juceRmlUi
 		glClearColor(0, 0, 0, 1);
 		glClear(GL_COLOR_BUFFER_BIT);
 
+#ifdef JUCERMLUI_NO_GL_RENDERERS
+		/* No GL renderer is compiled in, so no GL context is ever created and
+		 * this function is unreachable; the null stubs keep it compiling. */
+		struct NoGlRenderer { void SetViewport(int, int) {} void BeginFrame() {} void EndFrame() {} };
+		NoGlRenderer* gl2 = nullptr;
+		NoGlRenderer* gl3 = nullptr;
+#else
 		auto* gl2 = dynamic_cast<RenderInterface_GL2*>(m_renderInterface.get());
 		auto* gl3 = dynamic_cast<RenderInterface_GL3*>(m_renderInterface.get());
+#endif
 
 		if (gl3)
 		{
@@ -360,7 +381,13 @@ namespace juceRmlUi
 
 			const juce::Image::BitmapData data(m_screenshot, juce::Image::BitmapData::writeOnly);
 
-			glReadPixels(0, 0, size.x, size.y, GL_BGRA, GL_UNSIGNED_BYTE, data.data);
+			/* OpenGL ES (iOS) spells this GL_BGRA_EXT; desktop GL has GL_BGRA. */
+#if defined(GL_BGRA)
+			constexpr GLenum bgra = GL_BGRA;
+#else
+			constexpr GLenum bgra = GL_BGRA_EXT;
+#endif
+			glReadPixels(0, 0, size.x, size.y, bgra, GL_UNSIGNED_BYTE, data.data);
 
 			// OpenGL has the origin in the lower left, juce in the upper left, so we need to flip the image vertically
 			juce::Image flipped = juce::Image(m_screenshot.getFormat(), m_screenshot.getWidth(), m_screenshot.getHeight(), false);

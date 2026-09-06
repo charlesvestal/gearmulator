@@ -7,6 +7,17 @@ option(${CMAKE_PROJECT_NAME}_BUILD_JUCEPLUGIN_CLAP "Build CLAP version of Juce p
 option(${CMAKE_PROJECT_NAME}_BUILD_JUCEPLUGIN_LV2 "Build LV2 version of Juce plugins" off)
 option(${CMAKE_PROJECT_NAME}_BUILD_JUCEPLUGIN_AU "Build AU version of Juce plugins" on)
 option(${CMAKE_PROJECT_NAME}_BUILD_JUCEPLUGIN_Standalone "Build Standalone version of Juce plugins" off)
+option(${CMAKE_PROJECT_NAME}_BUILD_JUCEPLUGIN_AUV3 "Build AUv3 version of Juce plugins" off)
+
+# iOS/iPadOS hosts only load AUv3, and an AUv3 ships INSIDE a host app -- the
+# Standalone target is that app, so the two are one choice, not two.
+if(IOS)
+	set(${CMAKE_PROJECT_NAME}_BUILD_JUCEPLUGIN_AUV3 ON CACHE BOOL "" FORCE)
+	set(${CMAKE_PROJECT_NAME}_BUILD_JUCEPLUGIN_Standalone ON CACHE BOOL "" FORCE)
+	foreach(f VST2 VST3 CLAP LV2 AU)
+		set(${CMAKE_PROJECT_NAME}_BUILD_JUCEPLUGIN_${f} OFF CACHE BOOL "" FORCE)
+	endforeach()
+endif()
 
 set(USE_CLAP ${${CMAKE_PROJECT_NAME}_BUILD_JUCEPLUGIN_CLAP})
 set(USE_LV2 ${${CMAKE_PROJECT_NAME}_BUILD_JUCEPLUGIN_LV2})
@@ -16,6 +27,15 @@ set(USE_AU ${${CMAKE_PROJECT_NAME}_BUILD_JUCEPLUGIN_AU})
 set(USE_Standalone ${${CMAKE_PROJECT_NAME}_BUILD_JUCEPLUGIN_Standalone})
 
 set(JUCE_CMAKE_DIR ${CMAKE_CURRENT_LIST_DIR})
+
+# An iOS build produces bundles with the same NAMES as the macOS ones but a
+# different layout (flat, not Contents/); writing both into bin/plugins merges
+# an iOS .app into a macOS one. Give each platform its own folder.
+if(IOS)
+	set(TUS_PRODUCTS_SUFFIX "-ios")
+else()
+	set(TUS_PRODUCTS_SUFFIX "")
+endif()
 
 set(juce_formats "")
 set(plugin_formats "")
@@ -52,6 +72,13 @@ if(USE_CLAP)
     list(APPEND plugin_formats CLAP)
 	add_custom_target(PluginFormat_CLAP)
 	set_property(TARGET PluginFormat_CLAP PROPERTY FOLDER CustomTargets)
+endif()
+
+if(${CMAKE_PROJECT_NAME}_BUILD_JUCEPLUGIN_AUV3)
+    list(APPEND juce_formats AUv3)
+    list(APPEND plugin_formats AUv3)
+	add_custom_target(PluginFormat_AUv3)
+	set_property(TARGET PluginFormat_AUv3 PROPERTY FOLDER CustomTargets)
 endif()
 
 if(USE_Standalone)
@@ -116,8 +143,20 @@ macro(removeJuceDependencies targetName)
 	set_target_properties(${targetName} PROPERTIES INTERFACE_LINK_LIBRARIES "${pluginLibs}")
 endmacro()
 
+# The JUCE standalone opens an audio INPUT on iOS, and iOS aborts the process
+# (signal 6) if the app has no NSMicrophoneUsageDescription. The synth does not
+# use the input, but the host app has to declare it to survive launch.
+if(IOS)
+	set(TUS_IOS_PERMISSIONS
+		MICROPHONE_PERMISSION_ENABLED TRUE
+		MICROPHONE_PERMISSION_TEXT "This synthesizer does not record audio; iOS requires the declaration because the standalone host opens an audio input device.")
+else()
+	set(TUS_IOS_PERMISSIONS "")
+endif()
+
 macro(createJucePlugin targetName productName isSynth plugin4CC binaryDataProject synthLibProject)
 	juce_add_plugin(${targetName}
+		${TUS_IOS_PERMISSIONS}
 		# VERSION ...                                     # Set this if the plugin version is different to the project version
 		# ICON_BIG ...                                    # ICON_* arguments specify a path to an image file to use as an icon for the Standalone
 		# ICON_SMALL ...
@@ -131,7 +170,7 @@ macro(createJucePlugin targetName productName isSynth plugin4CC binaryDataProjec
 		COPY_PLUGIN_AFTER_BUILD FALSE                     # Should the plugin be installed to a default location after building?
 		PLUGIN_MANUFACTURER_CODE TusP                     # A four-character manufacturer id with at least one upper-case character
 		PLUGIN_CODE ${plugin4CC}                          # A unique four-character plugin id with exactly one upper-case character
-		PRODUCTS_FOLDER "${CMAKE_SOURCE_DIR}/bin/plugins/$<CONFIG>"
+		PRODUCTS_FOLDER "${CMAKE_SOURCE_DIR}/bin/plugins${TUS_PRODUCTS_SUFFIX}/$<CONFIG>"
 		                                                  # GarageBand 10.3 requires the first letter to be upper-case, and the remaining letters to be lower-case
 		FORMATS ${juce_formats}                           # The formats to build. Other valid formats are: AAX Unity VST AU AUv3 LV2
 		PRODUCT_NAME ${productName}                       # The name of the final executable, which can differ from the target name

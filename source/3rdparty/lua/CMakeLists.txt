@@ -16,6 +16,12 @@ set_source_files_properties(${LUA_SOURCES} PROPERTIES LANGUAGE CXX)
 target_include_directories(lua PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 
 if(UNIX)
-	target_compile_definitions(lua PRIVATE LUA_USE_POSIX)
+	# iOS has no system() and no tmpnam(); Lua knows this, but only if told --
+	# LUA_USE_IOS implies LUA_USE_POSIX and stubs os.execute out.
+	if(IOS)
+		target_compile_definitions(lua PRIVATE LUA_USE_IOS)
+	else()
+		target_compile_definitions(lua PRIVATE LUA_USE_POSIX)
+	endif()
 	target_link_libraries(lua PRIVATE m)
 endif()
