@@ -429,6 +429,13 @@ public:
 						}
 				break;
 			case 0x34:
+				/* 77% of this opcode is the double-precision sub-case (mem & 0xf
+				 * == 0x6), i.e. 20.5% of every real instruction. Hoisting it to a
+				 * compare at the top of the case -- the same trick that is worth
+				 * +22% on the MAC family -- measures 0.49x -> 0.46x, alternated
+				 * against a reference build under identical load. Removing an
+				 * indirect branch for a whole class pays; adding a compare in
+				 * front of a case that still ends in the jump table does not. */
 				if (mem < 0xa0 || (mem & 0xf0) == 0xb0) printf("Unexpected value for mem (%02x) with opcode 0x34\n", mem);
 				if (mem >= 0xa0 && mem < 0xb0) shared->mulcoeffs[(mem >> 1) & 7] = ((mem & 1) ? accB : accA).getPipelineSat24();
 				if (mem >= 0xc0)

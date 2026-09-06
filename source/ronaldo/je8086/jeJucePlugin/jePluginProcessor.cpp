@@ -1,5 +1,7 @@
 #include "jePluginProcessor.h"
 
+#include "jeLib/jePipeline.h"
+
 #include "jeController.h"
 #include "jePluginEditorState.h"
 
@@ -76,6 +78,21 @@ namespace jeJucePlugin
 	AudioPluginAudioProcessor::~AudioPluginAudioProcessor()
 	{
 		destroyEditorState();
+	}
+
+	void AudioPluginAudioProcessor::audioWorkgroupContextChanged(const juce::AudioWorkgroup& _workgroup)
+	{
+		m_audioWorkgroup = _workgroup;
+
+		/* Type-erased so jeLib stays free of JUCE. The token has to live for as
+		 * long as the thread stays in the workgroup, so it is thread_local: each
+		 * stage thread joins with its own, and rejoining with the same token
+		 * replaces the previous membership rather than stacking. */
+		jeLib::pipelineSetWorkgroupJoiner([this]
+		{
+			thread_local juce::WorkgroupToken token;
+			m_audioWorkgroup.join(token);
+		});
 	}
 
 	jucePluginEditorLib::PluginEditorState* AudioPluginAudioProcessor::createEditorState()

@@ -15,6 +15,14 @@ namespace jeLib
 	 * is not realtime. */
 	void pipelineAdoptHostSchedule();
 
+	/* The host's audio workgroup, as a type-erased join callback -- jeLib cannot
+	 * depend on JUCE. Each pipeline stage calls it once when it is published and
+	 * again whenever it changes, so the stages are scheduled as one cohort
+	 * serving the host's render deadline instead of as independent realtime
+	 * threads. On Apple silicon this is the only mechanism that reliably keeps
+	 * helper threads on performance cores; there is no affinity API. */
+	void pipelineSetWorkgroupJoiner(std::function<void()> _join);
+
 	class Je8086;
 
 	/* Opt-in parallel ASIC pipeline.

@@ -8,6 +8,7 @@
 #include "dsp56kBase/threadtools.h"
 
 #include <atomic>
+#include <mutex>
 #include <thread>
 #include <cstring>
 #include <cstdlib>
@@ -107,10 +108,45 @@ namespace jeLib
 			 *
 			 * Note the warning in threadtools.cpp: pthread_setschedparam() must
 			 * never be called here, it permanently opts the thread out of QoS. */
-			return dsp56k::ThreadTools::setCurrentThreadPriority(dsp56k::ThreadPriority::Highest);
+			/* QoS only. THREAD_TIME_CONSTRAINT_POLICY was tried here and measured
+			 * WORSE on device -- underruns from the second second, where the
+			 * QoS-only build had held 27 clean seconds. These stages are
+			 * continuous producers, not periodic deadline workers: as independent
+			 * realtime threads each declaring a 23 ms computation in a 46 ms
+			 * constraint, four of them are an enormous reservation, and
+			 * threadtools.cpp warns that understating it gets the thread demoted
+			 * out of the band on overrun.
+			 *
+			 * The correct primitive is the host's audio workgroup, which says the
+			 * true thing -- these threads serve one render cycle, to the host's
+			 * deadline, as a cohort. See stageJoinWorkgroup() below. */
+			return pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0) == 0;
 #else
 			return false;
 #endif
+		}
+
+		/* The host's audio workgroup, published by the plugin (jeLib cannot depend
+		 * on JUCE). Stage threads join it when it appears or changes, the same
+		 * generation-counter trick used for the host schedule -- the workgroup
+		 * arrives at prepareToPlay, which is after the stages have started. */
+		inline std::mutex& workgroupMutex() { static std::mutex m; return m; }
+		inline std::function<void()>& workgroupJoiner() { static std::function<void()> f; return f; }
+		inline std::atomic<uint32_t>& workgroupGeneration() { static std::atomic<uint32_t> g{0}; return g; }
+
+		inline void followWorkgroup(uint32_t& _seen)
+		{
+			const auto gen = workgroupGeneration().load(std::memory_order_acquire);
+			if (gen == _seen)
+				return;
+			_seen = gen;
+			std::function<void()> join;
+			{
+				std::scoped_lock lock(workgroupMutex());
+				join = workgroupJoiner();
+			}
+			if (join)
+				join();
 		}
 
 		/* Cheap enough to sit in the sample loop: one relaxed load unless the
@@ -448,10 +484,12 @@ namespace jeLib
 		auto& asics = m_je.getAsics();
 		uint32_t sample = 0;
 		uint32_t seenSchedule = 0;
+		uint32_t seenWorkgroup = 0;
 
 		while (!impl.shutdown.load(std::memory_order_relaxed))
 		{
 			followHostSchedule(seenSchedule);
+			followWorkgroup(seenWorkgroup);
 			/* Wait for our input handoff AND for the previous stage to have
 			 * published this sample, so forwarded register writes stamped with it
 			 * have all arrived. */
@@ -524,7 +562,9 @@ namespace jeLib
 		/* This runs on the thread driving step(), which renders stage 0 and so
 		 * needs the same priority as the stages. */
 		static thread_local uint32_t seenSchedule = 0;
+		static thread_local uint32_t seenWorkgroup = 0;
 		followHostSchedule(seenSchedule);
+		followWorkgroup(seenWorkgroup);
 
 		auto& impl = *m_impl;
 		const int64_t produced = impl.stage[0].samplesProduced.load(std::memory_order_acquire);
@@ -556,5 +596,14 @@ namespace jeLib
 		auto& asics = m_je.getAsics();
 		for (int a = devices::g_je_split_asic; a < 4; ++a)
 			asics.setReadback(a, impl.readback[a]);
+	}
+
+	void pipelineSetWorkgroupJoiner(std::function<void()> _join)
+	{
+		{
+			std::scoped_lock lock(workgroupMutex());
+			workgroupJoiner() = std::move(_join);
+		}
+		workgroupGeneration().fetch_add(1, std::memory_order_release);
 	}
 }
