@@ -108,19 +108,20 @@ namespace jeLib
 			 *
 			 * Note the warning in threadtools.cpp: pthread_setschedparam() must
 			 * never be called here, it permanently opts the thread out of QoS. */
-			/* QoS only. THREAD_TIME_CONSTRAINT_POLICY was tried here and measured
-			 * WORSE on device -- underruns from the second second, where the
-			 * QoS-only build had held 27 clean seconds. These stages are
-			 * continuous producers, not periodic deadline workers: as independent
-			 * realtime threads each declaring a 23 ms computation in a 46 ms
-			 * constraint, four of them are an enormous reservation, and
-			 * threadtools.cpp warns that understating it gets the thread demoted
-			 * out of the band on overrun.
+			/* RT policy and the workgroup are ONE mechanism, not alternatives.
+			 * Apple: "Only real-time threads can join an audio workgroup", and a
+			 * DTS engineer spells out the ordering -- set
+			 * THREAD_TIME_CONSTRAINT_POLICY first, then os_workgroup_join.
 			 *
-			 * The correct primitive is the host's audio workgroup, which says the
-			 * true thing -- these threads serve one render cycle, to the host's
-			 * deadline, as a cohort. See stageJoinWorkgroup() below. */
-			return pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0) == 0;
+			 * Tested separately, both disappointed, which is what sent me looking:
+			 * RT alone was WORSE (each stage becomes an independent deadline
+			 * thread with its own reservation), and the workgroup alone left the
+			 * decline untouched (a non-RT thread has nothing for the workgroup to
+			 * schedule as part of the cohort). Together is the supported
+			 * configuration. */
+			if (pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0) != 0)
+				return false;
+			return dsp56k::ThreadTools::setCurrentThreadRealtimeParameters(88200, 512);
 #else
 			return false;
 #endif
@@ -145,6 +146,10 @@ namespace jeLib
 				std::scoped_lock lock(workgroupMutex());
 				join = workgroupJoiner();
 			}
+			/* Whether this actually happens has never been verified, and it is the
+			 * difference between staying on a performance core and being demoted
+			 * to an efficiency one after sustained load -- a 1.5x cliff. */
+			fprintf(stderr, "[je] stage thread: workgroup joiner %s\n", join ? "PRESENT, joining" : "ABSENT");
 			if (join)
 				join();
 		}
@@ -217,6 +222,11 @@ namespace jeLib
 				const char* e = getenv("JE_PIPELINE_SPINS");
 				return e ? static_cast<uint32_t>(atoi(e)) : 4096u;
 			}();
+			/* NOT on Apple: sched_yield()/this_thread::yield() is reported to make
+			 * the scheduler migrate the thread to an efficiency core -- the same
+			 * advice that has OpenMP users setting KMP_USE_YIELD=0 on Apple
+			 * silicon. A pipeline stage that yields on every handoff is
+			 * volunteering for demotion 88200 times a second. */
 			static const uint32_t s_yields = []
 			{
 				const char* e = getenv("JE_PIPELINE_YIELDS");
@@ -236,10 +246,12 @@ namespace jeLib
 				{
 					cpuRelax();
 				}
+#ifndef __APPLE__
 				else if (spins < s_spins + s_yields)
 				{
 					std::this_thread::yield();
 				}
+#endif
 				else if (s_sleepNs)
 				{
 					timespec ts{0, static_cast<long>(s_sleepNs)};
@@ -600,6 +612,7 @@ namespace jeLib
 
 	void pipelineSetWorkgroupJoiner(std::function<void()> _join)
 	{
+		fprintf(stderr, "[je] host published an audio workgroup: %s\n", _join ? "yes" : "null");
 		{
 			std::scoped_lock lock(workgroupMutex());
 			workgroupJoiner() = std::move(_join);

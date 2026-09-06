@@ -83,6 +83,8 @@ namespace jeJucePlugin
 	void AudioPluginAudioProcessor::audioWorkgroupContextChanged(const juce::AudioWorkgroup& _workgroup)
 	{
 		m_audioWorkgroup = _workgroup;
+		fprintf(stderr, "[je] audioWorkgroupContextChanged: workgroup %s\n",
+		        _workgroup ? "valid" : "EMPTY");
 
 		/* Type-erased so jeLib stays free of JUCE. The token has to live for as
 		 * long as the thread stays in the workgroup, so it is thread_local: each
@@ -92,6 +94,8 @@ namespace jeJucePlugin
 		{
 			thread_local juce::WorkgroupToken token;
 			m_audioWorkgroup.join(token);
+			fprintf(stderr, "[je] stage joined workgroup: %s\n",
+			        token.getTokenProvider() ? "SUCCESS" : "FAILED (no token)");
 		});
 	}
 
