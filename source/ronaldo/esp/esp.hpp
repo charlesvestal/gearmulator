@@ -61,6 +61,17 @@ public:
 	inline int32_t getPipelineRawFull() const { return hist[head]; }
 	
 	inline void storePipeline() { hist[head++] = acc; if (head == delay) head = 0; }
+
+	/* N clocks with an unchanged acc, in O(1): after `delay` of them every slot
+	 * holds acc, and head has advanced N places around the ring. */
+	inline void storePipelineN(uint32_t n) {
+		if (n >= static_cast<uint32_t>(delay)) {
+			for (int i = 0; i < delay; i++) hist[i] = acc;
+			head = static_cast<int32_t>((static_cast<uint32_t>(head) + n) % static_cast<uint32_t>(delay));
+			return;
+		}
+		for (uint32_t i = 0; i < n; i++) { hist[head++] = acc; if (head == delay) head = 0; }
+	}
 protected:
 	static constexpr int delay {3}; // delay
 	int32_t acc {0}, hist[delay] = {}, head {0};
@@ -281,8 +292,56 @@ public:
 
 	void steperam() { if (lg2eram_size) shared->eram.tickCycle((pram[pc] >> 23) & 0x1f, pc); }
 
+	/* Nop skipping. Measured over a 10 s render, 63.8% of all executed program
+	 * words are zero, and a zero word does nothing but shift the skip field and
+	 * clock the two accumulator pipelines -- effects that fold into O(1) for a
+	 * run of any length. m_nextOp[pc] is the first pc at or after pc holding a
+	 * non-zero word, rebuilt only when the program changes (a patch change). */
+	void markProgramDirty() { m_skipTableDirty = true; }
+
+	void ensureSkipTable() {
+		if (!m_skipTableDirty) return;
+		uint32_t next = PRAM_SIZE;
+		m_nextOp[PRAM_SIZE] = static_cast<uint16_t>(PRAM_SIZE);
+		for (int32_t i = static_cast<int32_t>(PRAM_SIZE) - 1; i >= 0; --i) {
+			if (pram[i]) next = static_cast<uint32_t>(i);
+			m_nextOp[i] = static_cast<uint16_t>(next);
+		}
+		m_skipTableDirty = false;
+	}
+
+	/* Cycles from now in which this core does nothing observable to the other
+	 * core -- which is what makes it safe to fast-forward one core past them
+	 * while the other keeps stepping. */
+	uint32_t nopRun(uint32_t _limit) const {
+		if (pc >= PRAM_SIZE) return _limit;           // ran off the end: does nothing at all
+		uint32_t run = static_cast<uint32_t>(m_nextOp[pc]) - pc;
+		if (pcjumpat >= 0) {
+			const uint32_t at = static_cast<uint32_t>(pcjumpat);
+			if (at == pc) return 0;                   // the pending jump lands this cycle
+			if (at > pc && at - pc < run) run = at - pc;
+		}
+		return run < _limit ? run : _limit;
+	}
+
+	void skipNops(uint32_t n) {
+		if (!n || pc >= PRAM_SIZE) return;            // dead core: nothing to fold
+		skipfield = (n >= 31) ? 0 : (skipfield >> n);
+		accA.storePipelineN(n);
+		accB.storePipelineN(n);
+		pc += n;
+	}
+
 	void step() {
 		if (pc >= PRAM_SIZE) return;
+
+		/* The 768 steps of a program run as a loop in the caller, so everything
+		 * here is reloaded through `this` on every step unless the compiler can
+		 * prove the three buffers do not alias each other. They cannot: pram is
+		 * the program, iram this core's ring, shared the cross-core state. */
+		const uint32_t* __restrict const pram = this->pram;
+		int32_t* __restrict const iram = this->iram;
+		SharedState<lg2eram_size>* __restrict const shared = this->shared;
 		
 		if (pc == pcjumpat) {pc = pcjumpto; pcjumpat = -1;}
 
@@ -313,18 +372,27 @@ public:
 		int32_t mulInputB_24 = coef;
 		bool acc = false, clr = false;
 		bool setcondition = false;
-		switch (op)
+
+		/* The eight MAC forms are 41% of every instruction executed (measured
+		 * over a 10 s render), and they are not eight unrelated cases: bit 4
+		 * picks the accumulator, bits 2-3 pick "nothing / clear / clear after
+		 * storing A / clear after storing B". Decoding them as bit fields turns
+		 * the commonest instruction in the program from an indirect jump through
+		 * a 32-entry table -- one branch site for every opcode, so nearly always
+		 * mispredicted -- into a single predictable compare. */
+		if (op < 0x20)
 		{
-			// MAC
-			case 0x00: break;
-			case 0x04: clr = true; break;
-			case 0x08: iram[mempos] = mulInputA_24 = accA.getPipelineSat24(); clr = true; break;
-			case 0x0c: iram[mempos] = mulInputA_24 = accB.getPipelineSat24(); clr = true; break;
-			case 0x10: acc = true; break;
-			case 0x14: acc = true; clr = true; break;
-			case 0x18: acc = true; iram[mempos] = mulInputA_24 = accA.getPipelineSat24(); clr = true; break;
-			case 0x1c: acc = true; iram[mempos] = mulInputA_24 = accB.getPipelineSat24(); clr = true; break;
-			
+			acc = (op & 0x10) != 0;
+			const uint8_t sub = op & 0x0c;
+			if (sub)
+			{
+				clr = true;
+				if (sub & 8)
+					iram[mempos] = mulInputA_24 = ((sub & 4) ? accB : accA).getPipelineSat24();
+			}
+		}
+		else switch (op)
+		{
 			// SPECIAL/MUL/GRAM
 			case 0x20:
 				acc = (shiftbits & 2);
@@ -341,6 +409,7 @@ public:
 			case 0x2c: printf("Unexpected Opcode 0x2c. This should be unused\n"); break;
 			case 0x30:
 			{
+
 				acc = (coef & 2);
 				clr = !(coef & 1);
 				bool weird = (coef & 0x1c) == 0x1c;
@@ -357,7 +426,7 @@ public:
 				else if ((coef & 16) && mulInputB_24 < 0 && !weird) mulInputB_24 = ~(mulInputB_24 & 0x7fffff);
 				last_mulInputB_24 = mulInputB_24;
 				mulInputB_24 >>= 16;
-			}
+						}
 				break;
 			case 0x34:
 				if (mem < 0xa0 || (mem & 0xf0) == 0xb0) printf("Unexpected value for mem (%02x) with opcode 0x34\n", mem);
@@ -387,7 +456,9 @@ public:
 						case 0xe:
 						case 0xf:
 							mulInputA_24 = shared->eram.eramReadLatch;
-							writeIRAM(mulInputA_24, mem | 0xf0);
+							// not writeIRAM(): that writes through the member pointer,
+							// which would alias the __restrict one above.
+							iram[ramIdx(static_cast<uint32_t>(mem | 0xf0))] = mulInputA_24;
 							break;
 						default:
 							printf("Unknown value for mem (%02x) with opcode 0x34\n", mem);
@@ -472,6 +543,8 @@ protected:
 	int pcjumpat {-1}, pcjumpto {-1};
 	DspAccumulator accA, accB;
 	SharedState<lg2eram_size> *shared;
+	uint16_t m_nextOp[PRAM_SIZE + 1] {};
+	bool m_skipTableDirty = true;
 };
 
 
@@ -490,6 +563,7 @@ public:
 
 	void reset() {
 		memset(intmem, 0, sizeof(intmem));
+		markProgramDirty();
 		core0.reset();
 		core1.reset();
 		shared.reset();
@@ -505,10 +579,49 @@ public:
 	uint8_t readPRAM(size_t offset) const {return intmem[offset];}
 
 	// For running apart from h8 emu
-	void writePMem(uint16_t address, uint8_t val) {intmem[address] = val;}
-	void writePMem32(uint16_t address, uint32_t val, bool _recompile = true) {((uint32_t*)&intmem[0])[address] = val;} // addresses are /4 here
+	void writePMem(uint16_t address, uint8_t val) {intmem[address] = val; markProgramDirty();}
+	void writePMem32(uint16_t address, uint32_t val, bool _recompile = true) {((uint32_t*)&intmem[0])[address] = val; markProgramDirty();} // addresses are /4 here
 	uint32_t readHostReg() const {return *(uint32_t *)&shared.readback_regs[0];}
 	void step_cores() { core1.steperam(); core1.step(); core0.step();}
+
+	/* One sample of both cores, skipping runs of nops. Ordering is preserved
+	 * exactly: a core's nop cycles touch nothing the other core can observe, so
+	 * one may be fast-forwarded past them while the other steps normally. Only
+	 * core 1 clocks the ERAM state machine every cycle, so on an ASIC that has
+	 * ERAM only core 0 can be fast-forwarded -- which is still half the work. */
+	void run_cores() {
+		core0.ensureSkipTable();
+		core1.ensureSkipTable();
+
+		uint32_t c = 0;
+		while (c < ::PRAM_SIZE) {
+			const uint32_t remaining = static_cast<uint32_t>(::PRAM_SIZE) - c;
+			const uint32_t n0 = core0.nopRun(remaining);
+			const uint32_t n1 = lg2eram_size ? 0u : core1.nopRun(remaining);
+
+			if (n0 && n1) {
+				const uint32_t n = n0 < n1 ? n0 : n1;
+				core0.skipNops(n);
+				core1.skipNops(n);
+				c += n;
+			}
+			else if (n0) {
+				core0.skipNops(n0);
+				for (uint32_t i = 0; i < n0; ++i) { core1.steperam(); core1.step(); }
+				c += n0;
+			}
+			else if (n1) {
+				core1.skipNops(n1);
+				for (uint32_t i = 0; i < n1; ++i) core0.step();
+				c += n1;
+			}
+			else {
+				core1.steperam(); core1.step(); core0.step();
+				++c;
+			}
+		}
+	}
+	void markProgramDirty() { core0.markProgramDirty(); core1.markProgramDirty(); }
 	void sync_cores() {core0.sync(); core1.sync(); core0.syncShared(); if (lg2eram_size) shared.eram.tickSample();}
 
 	uint8_t readuC(uint32_t address) { return shared.readback_regs[address & 3]; }
@@ -535,6 +648,7 @@ public:
 			auto newValue = *reinterpret_cast<uint32_t*>(&intmem[(addr << 2)]);
 
 			if (newValue != oldValue)
+				markProgramDirty(),
 				opt.setProgramDirty(addr < 0x400 ? 1 : 2);	// core 0 owns words 0..0x3ff, core 1 the rest
 		}
 		else if (if_mode == 0x55 && (address & 3) == 3) {
@@ -594,7 +708,8 @@ public:
 			};
 
 			if (newValues != oldValues)
-				opt.setProgramDirty((addr < 0x400 ? 1 : 0) | (addr + 4 >= 0x400 ? 2 : 0));
+				markProgramDirty(),
+			opt.setProgramDirty((addr < 0x400 ? 1 : 0) | (addr + 4 >= 0x400 ? 2 : 0));
 		}
 		else if (if_mode == 0x57 && (address & 3) == 3) {
 			addr_sel = address & ~3;
