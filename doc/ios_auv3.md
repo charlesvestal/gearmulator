@@ -157,6 +157,12 @@ Measured: an M5 iPad Pro runs two simultaneous instances at 98-99% clean. An
 iPhone 15 Pro underruns, and does so at TWO stages and at FOUR alike, so the
 stage count is not what stops it.
 
+**Re-tested WITH the PGO profile applied and it still underruns.** That matters,
+because the first round of iPhone testing was done on builds that had silently
+lost the profile (see below) and were therefore running at roughly half their
+pipelined throughput -- a verdict drawn from those would not have been worth
+anything. Two performance cores is genuinely not enough, at full speed.
+
 Inferred: M1/M2 iPads should be fine. The interpreted engine measures 0.70x
 serial and 2.07x pipelined on an M1, which is the same CPU as the M1 iPad Pro.
 That is a same-family measurement rather than a spec-sheet guess, but it is
@@ -173,3 +179,19 @@ Do not read that as "the E-cores are useless": deriving the stage count from
 `hw.perflevel0.physicalcpu` to keep every stage on a P-core made the IPAD worse
 (three stages could not hold two instances that four handled), so the efficiency
 cores are carrying real work. The phone's problem is the total, not the mix.
+
+## The PGO profile must actually be applied
+
+`pgo/je8086.profdata` is worth **+45% serial and +50% pipelined**, bit-exact,
+and `scripts/build_ios.sh` did not reference it for most of its life. Builds made
+by hand with the flags ran two instances on an M5 iPad; the moment the script
+became the way the app got built, the profile dropped out and the same source
+could only manage one. Nothing in the build failed, warned, or looked different.
+
+That cost a long detour: the regression was blamed on a scheduling change and
+"fixed" by reverting it, which restored the source faithfully and changed
+nothing, because the source had never been the problem.
+
+The script now applies the profile if present and prints a loud warning if it is
+not. Do not remove that warning. A missing profile is invisible in every other
+way and halves the throughput of the one platform that has none to spare.
