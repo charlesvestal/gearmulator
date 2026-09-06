@@ -34,6 +34,7 @@
  * cannot share a binary. */
 #if BENCH_HAS_VIRUS
 #include "virusLib/device.h"
+#include "virusLib/romloader.h"
 #endif
 #if BENCH_HAS_XT
 #include "xtLib/xtDevice.h"
@@ -57,19 +58,41 @@ namespace
 		params.hostSamplerate = 48000.0f;
 
 #if BENCH_HAS_VIRUS
-		if(_synth == "virus")
+		if(_synth == "virus" || _synth == "virusA" || _synth == "virusB")
 		{
-			if(!baseLib::filesystem::readFile(params.romData, _rom) || params.romData.empty())
+			/* Virus A firmware is a PAIR of .mid files, not a .bin, so it can
+			 * only be loaded through ROMLoader -- which is also what picks the
+			 * model out of the files. Naming a .bin keeps the direct path. */
+			const auto model = _synth == "virusA" ? virusLib::DeviceModel::A
+			                 : _synth == "virusB" ? virusLib::DeviceModel::B
+			                 : virusLib::DeviceModel::C;
+
+			if(_rom.empty())
 			{
-				fprintf(stderr, "failed to read ROM '%s'\n", _rom.c_str());
-				return {};
+				const auto rom = virusLib::ROMLoader::findROM(model);
+				if(!rom.isValid())
+				{
+					fprintf(stderr, "no Virus ROM for that model in the current directory\n");
+					return {};
+				}
+				params.romData = rom.getRomFileData();
+				params.romName = rom.getFilename();
+				params.customData = static_cast<uint32_t>(rom.getModel());
 			}
-			params.romName = _rom;
-			/* The device model rides in customData, which defaults to 0, i.e.
-			 * Virus A. Handed a Virus C ROM under that, the firmware clocks
-			 * itself at 36 MHz and walks into a DEBUG instruction rather than
-			 * booting, so process() never returns. */
-			params.customData = static_cast<uint32_t>(virusLib::DeviceModel::C);
+			else
+			{
+				if(!baseLib::filesystem::readFile(params.romData, _rom) || params.romData.empty())
+				{
+					fprintf(stderr, "failed to read ROM '%s'\n", _rom.c_str());
+					return {};
+				}
+				params.romName = _rom;
+				/* The device model rides in customData, which defaults to 0,
+				 * i.e. Virus A. Handed a Virus C ROM under that, the firmware
+				 * clocks itself at 36 MHz and walks into a DEBUG instruction
+				 * rather than booting, so process() never returns. */
+				params.customData = static_cast<uint32_t>(model);
+			}
 			return std::make_unique<virusLib::Device>(params);
 		}
 #endif
@@ -126,7 +149,7 @@ int main(int _argc, char* _argv[])
 {
 	if(_argc < 2)
 	{
-		fprintf(stderr, "usage: %s <virus|xt|mq|n2x> [rom] [seconds] [voices] [dspClockPercent] [repeats]\n"
+		fprintf(stderr, "usage: %s <virus|virusA|virusB|xt|mq|n2x> [rom] [seconds] [voices] [dspClockPercent] [repeats]\n"
 		                "  virus takes a ROM path; xt/mq/n2x find theirs in the current directory\n", _argv[0]);
 		return 1;
 	}
@@ -166,11 +189,16 @@ int main(int _argc, char* _argv[])
 	 * using a shipped feature rather than a hack. NodalRed2x does not offer it. */
 	if(clockPercent != 100)
 	{
+		/* Ask even when canModifyDspClock() says no, and report what happens.
+		 * NodalRed2x implements setDspClockPercent() for both its DSPs yet
+		 * never overrides canModifyDspClock(), which looks like an oversight
+		 * hiding a usable lever. It is not: the call is accepted, the reported
+		 * clock stays at 100%, and the render gets SLOWER (0.91x -> 0.44x at
+		 * 50%), because on that device the ESAI clock sets the output rate --
+		 * so a lower clock means more emulated work per second of audio, not
+		 * less. The false is doing its job. */
 		if(!device->canModifyDspClock())
-		{
-			fprintf(stderr, "%s does not support changing its DSP clock\n", synth.c_str());
-			return 1;
-		}
+			fprintf(stderr, "note: %s reports canModifyDspClock()==false; trying anyway\n", synth.c_str());
 		if(!device->setDspClockPercent(clockPercent))
 		{
 			fprintf(stderr, "this device would not take a DSP clock of %u%%\n", clockPercent);
