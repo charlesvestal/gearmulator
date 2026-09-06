@@ -54,7 +54,12 @@ namespace jeJucePlugin
 		 * 8 blocks is ~2048 samples at the 256 a Bluetooth output forces on us.
 		 * It should be computed from the block size once that is known rather
 		 * than assumed here. */
-		const auto defaultLatencyBlocks = 8;
+		/* Runway for the pipeline, in HOST blocks -- so its cost in milliseconds
+		 * scales with the host's buffer: 4 blocks is ~5 ms at a 64-frame buffer
+		 * and ~43 ms at 512. It was 8 while the engine had no headroom and every
+		 * dip had to be absorbed; with the interpreter now running well above
+		 * real time the buffer matters much less than playability does. */
+		const auto defaultLatencyBlocks = 4;
 #else
 		const auto defaultLatencyBlocks = static_cast<int>(getPlugin().getLatencyBlocks());
 #endif

@@ -45,6 +45,14 @@ namespace synthLib
 		virtual void process(const TAudioInputs& _inputs, const TAudioOutputs& _outputs, size_t _size, const std::vector<SMidiEvent>& _midiIn, std::vector<SMidiEvent>& _midiOut);
 
 		void setExtraLatencySamples(uint32_t _size);
+
+		/* Upper bound on the runway, in samples. The runway is otherwise
+		 * latencyBlocks x the host's MAXIMUM expected block, which on iOS is far
+		 * larger than the blocks actually delivered -- an AUv3 running 64-frame
+		 * callbacks was asking for 16384 samples (186 ms) at the smallest block
+		 * count available. A device that knows how much headroom it has can say
+		 * so directly. 0 = no additional limit. */
+		void setMaxExtraLatencySamples(const uint32_t _max) { m_maxExtraLatency = _max; setExtraLatencySamples(m_requestedExtraLatency); }
 		uint32_t getExtraLatencySamples() const { return m_extraLatency; }
 
 		virtual uint32_t getInternalLatencyMidiToOutput() const { return 0; }
@@ -108,6 +116,8 @@ namespace synthLib
 		std::vector<SMidiEvent> m_midiIn;
 
 		uint32_t m_extraLatency = 0;
+		uint32_t m_maxExtraLatency = 0;
+		uint32_t m_requestedExtraLatency = 0;
 
 		MidiTranslator m_midiTranslator;
 		std::vector<SMidiEvent> m_translatorOut;

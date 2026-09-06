@@ -36,3 +36,11 @@ target_include_directories(jeLib PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/..)
 if(APPLE)
 	target_link_libraries(jeLib PRIVATE objc)
 endif()
+
+# On-device diagnostics and the self-test chord. Off by default: they write a
+# log file on every run. Invaluable while chasing scheduling behaviour on iOS,
+# which is why they are kept rather than deleted.
+option(${CMAKE_PROJECT_NAME}_JE_DEVICE_DIAGNOSTICS "Log per-second engine diagnostics on device" off)
+if(${CMAKE_PROJECT_NAME}_JE_DEVICE_DIAGNOSTICS)
+	target_compile_definitions(jeLib PRIVATE JE_DEVICE_DIAGNOSTICS=1)
+endif()

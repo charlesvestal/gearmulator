@@ -19,9 +19,15 @@
 
 namespace
 {
-#ifdef __APPLE__
+#if defined(__APPLE__) && defined(JE_DEVICE_DIAGNOSTICS)
 	/* Diagnostics for the iOS build: an AUv3 has no console, so this goes to a
-	 * file in the extension's own container, which devicectl can copy off. */
+	 * file in the extension's own container, which devicectl can copy off, and
+	 * to stderr so a run whose file is never collected still leaves its numbers.
+	 *
+	 * OFF unless JE_DEVICE_DIAGNOSTICS is defined at build time. It is what
+	 * found every bug in this series -- including several of my own wrong
+	 * theories -- so it is kept, not deleted. Build with
+	 * -Dgearmulator_JE_DEVICE_DIAGNOSTICS=ON to get it back. */
 	void jeDiag(const char* _fmt, ...)
 	{
 		static FILE* f = [] () -> FILE*
@@ -55,7 +61,7 @@ namespace
 	inline void jeDiag(const char*, ...) {}
 #endif
 
-#ifdef __APPLE__
+#if defined(__APPLE__) && defined(JE_DEVICE_DIAGNOSTICS)
 	/* NSProcessInfo.thermalState: 0 nominal, 1 fair, 2 serious, 3 critical.
 	 * The engine's own render loop slows by a third after ~30 s of sustained
 	 * load, long after the notes stop, which is what thermal throttling and
@@ -70,6 +76,8 @@ namespace
 		if (!pi) return -1;
 		return reinterpret_cast<long(*)(id, SEL)>(objc_msgSend)(pi, sel_registerName("thermalState"));
 	}
+#else
+	inline long jeThermalState() { return -1; }
 #endif
 
 	inline float dspWordToFloat(const uint32_t _d)
@@ -167,6 +175,20 @@ namespace jeLib
 		jeDiag("[je] dspThreads from host = %u", _params.dspThreads);
 
 		jeDiag("[je] esp jit: %s", jeLib::devices::jeEspInterp() ? "OFF (interpreted)" : "on");
+
+		/* Cap the runway in SAMPLES, not host blocks.
+		 *
+		 * The generic path asks for latencyBlocks x the host's MAXIMUM expected
+		 * block, which on iOS bears no relation to the blocks actually delivered:
+		 * an AUv3 running 64-frame callbacks was asking for 16384 samples --
+		 * 186 ms -- and even the smallest block count it can express is 42.7 ms.
+		 * That is the difference between a synth that feels playable and one that
+		 * does not.
+		 *
+		 * The runway only has to cover how far the engine can fall behind between
+		 * callbacks, and with the interpreter now running well above real time
+		 * that is small. 1024 samples is 11.6 ms at 88.2 kHz. */
+		setMaxExtraLatencySamples(1024);
 
 		m_thread.reset(new JeThread(*m_je8086));
 
@@ -321,7 +343,7 @@ namespace jeLib
 		 * being too slow. No-op when there is no pipeline or no realtime host. */
 		pipelineAdoptHostSchedule();
 
-#ifdef __APPLE__
+#if defined(__APPLE__) && defined(JE_DEVICE_DIAGNOSTICS)
 		/* Self-test load. The measurement that matters is the engine under
 		 * VOICES, and on iOS that otherwise needs a person holding a chord in a
 		 * host. With JE_SELFTEST_CHORD set, the standalone plays one to itself
