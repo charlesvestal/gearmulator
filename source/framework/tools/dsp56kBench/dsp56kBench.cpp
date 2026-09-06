@@ -217,22 +217,16 @@ int main(int _argc, char* _argv[])
 		midiOut.clear();
 	}
 
-	std::vector<synthLib::SMidiEvent> notes;
+	std::vector<synthLib::SMidiEvent> notesOn, notesOff;
 	for(uint8_t i=0; i<voices; ++i)
 	{
+		const auto note = static_cast<uint8_t>(48 + i * 3);
 		synthLib::SMidiEvent on(synthLib::MidiEventSource::Host);
-		on.a = 0x90; on.b = static_cast<uint8_t>(48 + i * 3); on.c = 100;
-		notes.push_back(on);
-	}
-	if(!notes.empty())
-	{
-		device->process(inputs, outputs, blockSize, notes, midiOut);
-		midiOut.clear();
-		for(int i=0; i<200; ++i)	// let the voices reach steady state
-		{
-			device->process(inputs, outputs, blockSize, midiIn, midiOut);
-			midiOut.clear();
-		}
+		on.a = 0x90; on.b = note; on.c = 100;
+		notesOn.push_back(on);
+		synthLib::SMidiEvent off(synthLib::MidiEventSource::Host);
+		off.a = 0x80; off.b = note; off.c = 0;
+		notesOff.push_back(off);
 	}
 
 	float peak = 0.0f;
@@ -254,6 +248,23 @@ int main(int _argc, char* _argv[])
 		peak = 0.0f;
 		sumSq = 0.0;
 		sumN = 0;
+
+		/* Retrigger every pass. A held note decays, and a decayed voice is
+		 * cheaper, so without this the FASTEST pass is simply the one where the
+		 * sound has died -- the peak/rms line read SILENT while the real-time
+		 * factor looked like the best result yet. */
+		if(!notesOn.empty())
+		{
+			device->process(inputs, outputs, blockSize, notesOff, midiOut);
+			midiOut.clear();
+			device->process(inputs, outputs, blockSize, notesOn, midiOut);
+			midiOut.clear();
+			for(int i=0; i<200; ++i)	// untimed: let the voices reach steady state
+			{
+				device->process(inputs, outputs, blockSize, midiIn, midiOut);
+				midiOut.clear();
+			}
+		}
 
 		const auto start = std::chrono::steady_clock::now();
 		for(size_t done=0; done<total; done+=blockSize)
