@@ -5,7 +5,10 @@
 
 #include "baseLib/os.h"
 
+#include "dsp56kBase/threadtools.h"
+
 #include <atomic>
+#include <thread>
 #include <cstring>
 #include <cstdlib>
 #include <ctime>
@@ -89,6 +92,22 @@ namespace jeLib
 			sched_param sp{};
 			sp.sched_priority = prio;
 			return pthread_setschedparam(pthread_self(), policy, &sp) == 0;
+#elif defined(__APPLE__)
+			/* QoS alone is NOT enough. A USER_INTERACTIVE thread still gets
+			 * demoted to an efficiency core under sustained load: measured in
+			 * AUM on an iPad, the stages held 11335 ns/sample for 27 s and then
+			 * decayed to 17983 -- a factor of 1.59, which is the P-to-E core
+			 * ratio, arriving long after the notes stopped.
+			 *
+			 * THREAD_TIME_CONSTRAINT_POLICY (the realtime band) is what keeps a
+			 * thread on a performance core; there is no affinity API that does it
+			 * on Apple silicon. setCurrentThreadPriority(Highest) applies the QoS
+			 * class AND that policy, which is what JeThread already gets and the
+			 * stages -- the threads doing all the ESP work -- did not.
+			 *
+			 * Note the warning in threadtools.cpp: pthread_setschedparam() must
+			 * never be called here, it permanently opts the thread out of QoS. */
+			return dsp56k::ThreadTools::setCurrentThreadPriority(dsp56k::ThreadPriority::Highest);
 #else
 			return false;
 #endif
@@ -145,10 +164,27 @@ namespace jeLib
 			 * every handoff; chained across stages that is what eats a small audio
 			 * buffer, and it is why this could not go below a 26 ms buffer live
 			 * even with two thirds of the CPU idle. Stay sub-sample. */
+			/* Three-phase back-off. The middle phase is the one that matters on
+			 * Darwin: nanosleep() there is not a 5 us sleep, it goes through
+			 * __semwait_signal and returns after tens to hundreds of
+			 * microseconds. At 88200 handoffs a second a stage that just misses
+			 * therefore loses tens of samples, and a profile of the pipeline
+			 * shows the stages asleep in nanosleep essentially all the time
+			 * rather than computing. Yielding instead gives the core back to the
+			 * host -- which pure spinning does not -- and returns as soon as we
+			 * are rescheduled, so it costs neither a core nor a quantum.
+			 *
+			 * Sleeping is kept only as the far back-off for a stage with nothing
+			 * to do at all (a stopped engine), where latency does not matter. */
 			static const uint32_t s_spins = []
 			{
 				const char* e = getenv("JE_PIPELINE_SPINS");
 				return e ? static_cast<uint32_t>(atoi(e)) : 4096u;
+			}();
+			static const uint32_t s_yields = []
+			{
+				const char* e = getenv("JE_PIPELINE_YIELDS");
+				return e ? static_cast<uint32_t>(atoi(e)) : 1024u;
 			}();
 			static const uint32_t s_sleepNs = []
 			{
@@ -163,6 +199,10 @@ namespace jeLib
 				if (++spins < s_spins)
 				{
 					cpuRelax();
+				}
+				else if (spins < s_spins + s_yields)
+				{
+					std::this_thread::yield();
 				}
 				else if (s_sleepNs)
 				{
