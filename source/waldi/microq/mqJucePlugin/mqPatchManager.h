@@ -36,6 +36,14 @@ namespace mqJucePlugin
 		static constexpr uint64_t g_userDataArrangement = 1;
 
 	private:
+		// The microQ exposes no ROM patches of its own: its firmware image is
+		// distributed as a MIDI OS update, which carries no preset area (over half
+		// of the 512 KB image is 0xff padding). So "Factory" here means a bank
+		// dump shipped alongside the ROM, split back into its single dumps.
+		const std::vector<pluginLib::patchDB::Data>& factoryBank();
+		std::vector<pluginLib::patchDB::Data> m_factoryBank;
+		bool m_factoryBankScanned = false;
+
 		static std::string extractName(const pluginLib::patchDB::Data& _sysex, size_t _offset, size_t _length);
 		bool activateSingle(const pluginLib::patchDB::Data& _sysex, uint32_t _part);
 		bool activateMulti(const pluginLib::patchDB::Data& _multi);

@@ -8,7 +8,13 @@
 #include "mqLib/mqmiditypes.h"
 #include "wLib/wMidiTypes.h"
 
+#include <set>
+
+#include "dsp56kBase/logging.h"
+
 #include "synthLib/midiToSysex.h"
+#include "synthLib/romLoader.h"
+#include "baseLib/filesystem.h"
 
 namespace mqJucePlugin
 {
@@ -18,6 +24,9 @@ namespace mqJucePlugin
 	static constexpr std::initializer_list<jucePluginEditorLib::patchManager::GroupType> g_groupTypes =
 	{
 		jucePluginEditorLib::patchManager::GroupType::Favourites,
+		// Rom datasources map to Factory (patchmanager/types.cpp); without the
+		// group here they would load and have nowhere to be shown.
+		jucePluginEditorLib::patchManager::GroupType::Factory,
 		jucePluginEditorLib::patchManager::GroupType::MidiBanks,
 		jucePluginEditorLib::patchManager::GroupType::LocalStorage,
 		jucePluginEditorLib::patchManager::GroupType::DataSources,
@@ -31,6 +40,24 @@ namespace mqJucePlugin
 		setTagTypeName(pluginLib::patchDB::TagType::CustomC, "Type");
 		addGroupTreeItemForTag(pluginLib::patchDB::TagType::CustomC);
 		startLoaderThread();
+
+		// One Factory group per bank present in the shipped dump. _save is false:
+		// this is derived from a file on disk, so persisting it would leave the DB
+		// carrying a stale copy once that file changes or goes away.
+		std::set<uint8_t> banks;
+		for (const auto& single : factoryBank())
+			if(single.size() > 5)
+				banks.insert(single[5]);
+
+		for (const auto bank : banks)
+		{
+			pluginLib::patchDB::DataSource ds;
+			ds.type = pluginLib::patchDB::SourceType::Rom;
+			ds.origin = pluginLib::patchDB::DataSourceOrigin::Manual;
+			ds.bank = bank;
+			ds.name = std::string("Factory ") + static_cast<char>('A' + bank);
+			addDataSource(ds, false);
+		}
 	}
 
 	PatchManager::~PatchManager()
@@ -61,9 +88,58 @@ namespace mqJucePlugin
 		return !_data.empty();
 	}
 
-	bool PatchManager::loadRomData(pluginLib::patchDB::DataList& _results, uint32_t _bank, uint32_t _program)
+	const std::vector<pluginLib::patchDB::Data>& PatchManager::factoryBank()
 	{
-		return false;
+		if(m_factoryBankScanned)
+			return m_factoryBank;
+		m_factoryBankScanned = true;
+
+		// Deliberately NOT the size window the ROM loader uses (300-400 KB): a
+		// factory bank is ~120-130 KB, so the two can share a folder and neither
+		// is mistaken for the other. Identified by content, not by name.
+		for (const auto& file : synthLib::RomLoader::findFiles(".mid", 32 * 1024, 280 * 1024))
+		{
+			std::vector<uint8_t> data;
+			if(!baseLib::filesystem::readFile(data, file) || data.empty())
+				continue;
+
+			std::vector<std::vector<uint8_t>> messages;
+			synthLib::MidiToSysex::splitMultipleSysex(messages, data, true);
+
+			std::vector<pluginLib::patchDB::Data> singles;
+
+			for (auto& m : messages)
+			{
+				// F0 3E 10 <dev> 10 <bank> <program> ... F7
+				if(m.size() < 8 || m.front() != 0xf0 || m.back() != 0xf7)
+					continue;
+				if(m[1] != wLib::IdWaldorf || m[2] != mqLib::IdMicroQ)
+					continue;
+				if(m[4] != static_cast<uint8_t>(mqLib::SysexCommand::SingleDump))
+					continue;
+				singles.emplace_back(std::move(m));
+			}
+
+			if(singles.empty())
+				continue;
+
+			LOG("Factory bank: " << singles.size() << " single dumps from " << file);
+			m_factoryBank = std::move(singles);
+			break;
+		}
+
+		return m_factoryBank;
+	}
+
+	bool PatchManager::loadRomData(pluginLib::patchDB::DataList& _results, const uint32_t _bank, uint32_t /*_program*/)
+	{
+		// The whole bank is asked for at once (db.cpp passes g_invalidProgram).
+		for (const auto& single : factoryBank())
+		{
+			if(single.size() > 5 && single[5] == static_cast<uint8_t>(_bank))
+				_results.push_back(single);
+		}
+		return !_results.empty();
 	}
 
 	PatchManager::PatchType PatchManager::detectPatchType(const pluginLib::patchDB::Data& _sysex) const
