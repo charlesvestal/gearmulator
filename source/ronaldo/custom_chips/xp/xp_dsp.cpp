@@ -276,6 +276,18 @@ namespace xpLib
 
 	void Dsp::runJitFrame(const StepRequest& _request)
 	{
+		// iOS refuses an executable mapping to a process without the JIT
+		// entitlement. asmjit still ALLOCATES and emits happily -- the buffer is
+		// rw- with rwx max -- so acquire() returns a valid-looking pointer into
+		// memory that can never be executed, and the first call into it is killed
+		// as EXC_BAD_ACCESS / KERN_PROTECTION_FAILURE with a CODESIGNING
+		// "Invalid Page" termination. The null-return fallback below cannot catch
+		// that, because nothing failed. So do not take the path at all: the naive
+		// engine is the whole engine here.
+#if XP_DSP_NO_JIT
+		runFrame(m_state, _request);
+		return;
+#else
 		// The jumps form has no cycle-based deposit code: its frames must come with the deposits hoisted.
 		const auto compiled = _request.executeProgram && !(m_flat.jumps && _request.mixerFrame != nullptr);
 		const auto run = compiled ? jit().acquire(m_generation, m_flat, nullptr) : nullptr;
@@ -294,6 +306,7 @@ namespace xpLib
 		frame.processingBank[0] = dspOps::processingIram(m_state).data();
 		run(&frame);
 		dspOps::endFrame(m_state, context);
+#endif
 	}
 
 	void Dsp::stepLinkedEngines(Dsp& _a, DspState& _aState, const StepRequest& _aRequest, Dsp& _b, DspState& _bState,
@@ -324,6 +337,11 @@ namespace xpLib
 
 	void Dsp::stepLinkedJit(Dsp& _a, const StepRequest& _aRequest, Dsp& _b, const StepRequest& _bRequest)
 	{
+#if XP_DSP_NO_JIT
+		// See runJitFrame(): no executable pages on iOS, so run the pair naively.
+		stepLinkedEngines(_a, _a.m_state, _aRequest, _b, _b.m_state, _bRequest);
+		return;
+#endif
 		if (_a.m_linkPartner != &_b)
 		{
 			_a.m_link.reset();

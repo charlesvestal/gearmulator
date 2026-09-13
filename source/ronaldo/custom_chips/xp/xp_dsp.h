@@ -8,6 +8,24 @@
 #include <cstdint>
 #include <memory>
 
+// The DSP JIT needs an executable mapping. iOS grants none to a process without
+// the JIT entitlement, and asmjit does not fail on it -- it emits into rw- memory
+// that is killed on first call (CODESIGNING "Invalid Page") -- so the decision has
+// to be made here rather than by checking a return value. Defaults on for iOS;
+// define it yourself to force the naive engine anywhere else.
+#if !defined(XP_DSP_NO_JIT)
+#	if defined(__APPLE__)
+#		include <TargetConditionals.h>
+#		if TARGET_OS_IPHONE
+#			define XP_DSP_NO_JIT 1
+#		else
+#			define XP_DSP_NO_JIT 0
+#		endif
+#	else
+#		define XP_DSP_NO_JIT 0
+#	endif
+#endif
+
 namespace xpLib
 {
 	class DspJitDispatcher;
