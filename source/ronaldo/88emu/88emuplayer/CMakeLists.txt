@@ -106,7 +106,12 @@ endif()
 set(playerProductName "88emuPlayer")
 createMacSetupScript(${playerProductName})
 
-if(APPLE)
+if(IOS)
+	# No install rule on iOS: the app is deployed by Xcode/devicectl, never by
+	# `cmake --install`, and JUCE's iOS standalone carries Images.xcassets as a
+	# RESOURCE -- install() refuses a directory there and the configure fails
+	# before any target exists. Nothing to install, so nothing to declare.
+elseif(APPLE)
 	install(TARGETS 88emuplayer_Standalone DESTINATION . COMPONENT ${playerProductName}-Standalone)
 	# The .app is downloaded from a browser, so it arrives quarantined
 	installMacSetupScript(. ${playerProductName}-Standalone)
