@@ -171,7 +171,10 @@ endif()
 # Output), which lets the player publish its own MIDI ports to the host instead of
 # needing a loop-back driver. The two trees produce different target names
 # (portmidi-static vs. portmidi) so they coexist when both Vavra and the SC-88 are on.
-if(${CMAKE_PROJECT_NAME}_SYNTH_88EMU AND NOT ANDROID AND NOT TARGET portmidi)
+# portmidi does not build for iOS: porttime/ptmacosx_mach.c includes
+# CoreAudio/HostTime.h, which the iOS SDK does not ship. An AUv3 takes its MIDI
+# from the host, so the bridge is stubbed there instead (Emu88PortMidiBridge).
+if(${CMAKE_PROJECT_NAME}_SYNTH_88EMU AND NOT ANDROID AND NOT IOS AND NOT TARGET portmidi)
 	# Build static even if a parent set BUILD_SHARED_LIBS ON.
 	set(_pm_prev_shared ${BUILD_SHARED_LIBS})
 	set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)

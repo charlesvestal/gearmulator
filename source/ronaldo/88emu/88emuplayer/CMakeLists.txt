@@ -38,6 +38,13 @@ set(HARDWARE_ASSETS
 juce_add_binary_data(88emuplayer_BinaryData SOURCES ${HARDWARE_ASSETS})
 
 juce_add_plugin(88emuplayer
+	# This target calls juce_add_plugin directly instead of going through
+	# createJucePlugin(), so it does not inherit these. Without the microphone
+	# declaration iOS kills the app at launch: the JUCE standalone opens an audio
+	# INPUT device, and a process that does so with no NSMicrophoneUsageDescription
+	# is terminated. The synth never reads the input; the declaration is what lets
+	# it survive launch. See TUS_IOS_PERMISSIONS in cmake/juce.cmake.
+	${TUS_IOS_PERMISSIONS}
 	# 512x512 is an exact .icns size and clears the 256 the .ico needs for its
 	# largest entry - juceaide only emits a Windows size if a source image is at
 	# least that big. Deliberately not in HARDWARE_ASSETS: it is the application
@@ -53,9 +60,15 @@ juce_add_plugin(88emuplayer
 	COPY_PLUGIN_AFTER_BUILD FALSE
 	PLUGIN_MANUFACTURER_CODE TusP
 	PLUGIN_CODE TscH
-	FORMATS Standalone
+	# The module as a PLUGIN, not just the standalone file player. iOS hosts load
+	# AUv3 only; AU and VST3 are what make it testable on the desktop.
+	FORMATS Standalone AU VST3 AUv3
 	PRODUCT_NAME "88emuPlayer"
-	PRODUCTS_FOLDER "${CMAKE_SOURCE_DIR}/bin/plugins/$<CONFIG>"
+	# TUS_PRODUCTS_SUFFIX or the iOS build writes into the macOS bundle of the same
+	# name: same layout, different platform, and codesign then refuses the result
+	# with "unsealed contents present in the bundle root". juce.cmake sets the
+	# suffix for exactly this reason; hardcoding the path opted out of it.
+	PRODUCTS_FOLDER "${CMAKE_SOURCE_DIR}/bin/plugins${TUS_PRODUCTS_SUFFIX}/$<CONFIG>"
 	BUNDLE_ID "com.theusualsuspects.SC88Hardware"
 )
 
@@ -87,7 +100,7 @@ target_link_libraries(88emuplayer PRIVATE
 	juceUiLib
 	jucePluginData
 	juce_plugin_modules
-	portmidi
+	$<$<NOT:$<BOOL:${IOS}>>:portmidi>
 )
 target_compile_definitions(88emuplayer PUBLIC JUCE_GLOBAL_MODULE_SETTINGS_INCLUDED=1)
 set_property(TARGET 88emuplayer PROPERTY FOLDER "Ronaldo/88emu")

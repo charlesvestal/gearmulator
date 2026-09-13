@@ -29,7 +29,11 @@ namespace emu88Player
 		// and the settings page says so instead of offering a dead switch.
 		static constexpr bool virtualPortsSupported()
 		{
-#if JUCE_WINDOWS
+#if JUCE_WINDOWS || JUCE_IOS
+			// Windows MM registers no interface for Pm_CreateVirtualInput/Output.
+			// iOS has no portmidi at all -- it wants CoreAudio/HostTime.h, which
+			// does not exist there -- and a plugin gets its MIDI from the host
+			// anyway, so the bridge is dead weight rather than a missing feature.
 			return false;
 #else
 			return true;
