@@ -34,7 +34,7 @@ Per-synth CMake flags: `-Dgearmulator_SYNTH_OSIRUS=ON`, `_OSTIRUS`, `_VAVRA`, `_
 Convenience scripts: `build_win64.bat`, `build_linux.sh`, `build_mac.sh`.
 
 **Test consoles** — the fastest way to iterate on DSP/device code without building a plugin:
-`virusTestConsole`, `virusIntegrationTest`, `mqTestConsole`, `xtTestConsole`, `n2xTestConsole`, `jeTestConsole`.
+`virusTestConsole`, `virusIntegrationTest`, `mqTestConsole`, `xtTestConsole`, `n2xTestConsole`, `JE8086TestConsole`.
 
 ### Platform-specific build settings
 
@@ -158,6 +158,7 @@ Responsibilities: load firmware ROM, initialize DSP/CPU memory, handle MIDI via 
 3. **Shared plugin infra** → `source/framework/juce/jucePluginLib/` or `source/framework/synthLib/`
 4. **DSP emulator** → `source/cpu/dsp56300/source/dsp56kEmu/`
 5. **New parameter** → update `parameterDescriptions_*.json` in the plugin dir, map to MIDI CC/SysEx in the processor, update skin RML if it should appear in the UI
+6. **New synth or FX product** → follow `doc/adding_a_product.md` end to end: MIDI-only controller/device contract, identifiers, CMake, CI, deploy folder, Discord, YouTrack, website, checklist
 
 Test with the test consoles before building full plugins.
 
@@ -244,7 +245,7 @@ The Microwave II/XT and microQ support voice expansion via extra DSP boards; in 
 **GitHub Actions** (`.github/workflows/`): `cmake.yml` (matrix: Ubuntu, macOS 14, Windows 2022, default + Ninja generators), `nightly.yml`, `release.yml`. Linux CI deps: `sudo apt install -y libgl1-mesa-dev xorg-dev libasound2-dev`.
 
 **Jenkins** (private) — three jobs:
-- **`dsp56300_main`** — single-platform build, Jenkinsfile from SCM (`scripts/Jenkinsfile`). Stages: Checkout → Compile → Pack → Integration Tests → Deploy → Upload → GitHub. Params: `Branch`, `AgentLabel`, `Synths` (cmake `-D` flag string), `DisplayName`, `FXPlugins`, `Deploy`, `Upload`, `GitHub`, `IntegrationTests`, `UploadFolder`.
+- **`dsp56300_main`** — single-platform build, inline pipeline (`scripts/Jenkinsfile` is a manually-synced mirror, not loaded from SCM). Stages: Checkout → Compile → Pack → Integration Tests → Deploy → Upload → GitHub. Params: `Branch`, `AgentLabel`, `Synths` (cmake `-D` flag string), `DisplayName`, `FXPlugins`, `Deploy`, `Upload`, `GitHub`, `IntegrationTests`, `UploadFolder`.
 - **`dsp56300_main_multi`** — multi-platform orchestrator, inline pipeline (`scripts/JenkinsfileMulti`). Triggers `dsp56300_main` in parallel per platform; per-synth booleans (`SynthOsirus`, `SynthOsTIrus`, `SynthVavra`, `SynthXenia`, `SynthNodalRed2x`, `SynthJe8086`, `DSPBridge`) are assembled into the `Synths` string. `UploadFolder`: `internal`, `alpha`, `beta`, `donators`. Posts an MQTT notification on completion.
 - **`dsp56300_copy`** — rclone archival of build artifacts.
 
@@ -265,6 +266,23 @@ Agent labels: `win`, `mac`, `linux && arm`, `linux && x86`.
 - Subsystem: RmlUI C++, Skin, Framework, dsp56000, MC68331
 
 **When a ticket is done:** set State/Stage to **Review**, assign to **bax**, and set **Fixed in Version** (BUG) or **Fixed in build** (EMU) to the current version from `CMakeLists.txt` (`project(gearmulator VERSION x.y.z)`). The Emulator/Product field tells you which source directories are relevant — see the per-synth table above.
+
+**If the version is missing from the field, add it — never skip the field or pick a wrong
+version because the right one is not offered.** Those lists are YouTrack bundles, not a fixed
+schema, and they routinely lag the current version (EMU's stopped at 2.2.15 while 2.2.17 was
+shipping, which left fixes recorded against a version that had already been released). Adding
+the next version before it exists is fine too.
+
+The MCP tools only reach issues, so use the REST API with the bearer token from the
+`YouTrackTUS` entry in `.mcp.json` (`https://tus.youtrack.cloud/api`):
+
+1. Find the bundle — `GET /admin/projects/{projectId}/customFields?fields=id,field(name),bundle(id,$type)`.
+   BUG "Fixed in Version" is a `VersionBundle`; EMU "Fixed in build" is a `BuildBundle`
+   (project `0-3`, bundle `183-1`).
+2. Add the value — `POST /admin/customFieldSettings/bundles/{version|build}/{bundleId}/values`
+   with `{"name":"2.2.18"}`. Append in release order; the list is not sorted for you.
+
+Then set the field as usual and confirm with `get_issue_fields_schema`.
 
 ## Release Workflow
 

@@ -81,6 +81,10 @@ namespace mcpServer
 			getpid()
 #endif
 		);
+		// Set by the client for every process it spawns, so the plugin's host inherits it. Lets a client
+		// pick its own instance out of the discovery file instead of guessing a port. See scripts/mcpBridge.py
+		if (const auto* sessionId = std::getenv("CLAUDE_CODE_SESSION_ID"))
+			entry.sessionId = sessionId;
 		DiscoveryFile::registerInstance(entry);
 
 		return true;
@@ -669,7 +673,12 @@ namespace mcpServer
 					throw std::runtime_error("Controller not available");
 
 				const uint8_t part = static_cast<uint8_t>(_params.get("part").getInt());
-				m_processor.getController().setCurrentPart(part);
+
+				// Parameter bindings, the editor and the patch manager all follow the part, and they are UI state.
+				runOnMessageThread([&]
+				{
+					m_processor.getController().setCurrentPart(part);
+				});
 
 				auto result = JsonValue::object();
 				result.set("success", JsonValue::fromBool(true));

@@ -7,6 +7,8 @@
 
 #include "synthLib/os.h"
 
+#include <cstring>
+
 #include "mcpServerLib/mcpPluginServer.h"
 #include "mcpDomTools.h"
 #include "mcpPatchManagerTools.h"
@@ -20,6 +22,8 @@ namespace jucePluginEditorLib
 {
 	namespace
 	{
+		constexpr const char* g_skinVariablePrefix = "skinvar_";
+
 #ifdef ZYNTHIAN
 		void noLoggingFunc(const std::string&)
 		{
@@ -34,8 +38,11 @@ namespace jucePluginEditorLib
 		// overhead and was provoking a port-13710 race that crashed n2x builds.
 		bool isJuceHelperProcess()
 		{
+			// hostApplicationPath, not currentExecutableFile: inside a plugin the latter is the module JUCE
+			// itself lives in - our own .dll/.so - so the comparison below could never match and every helper
+			// went on starting a server. hostApplicationPath is the process, which is what we are asking about.
 			const auto exeName = juce::File::getSpecialLocation(
-				juce::File::currentExecutableFile).getFileNameWithoutExtension().toLowerCase();
+				juce::File::hostApplicationPath).getFileNameWithoutExtension().toLowerCase();
 			return exeName.contains("juce_vst3_helper")
 				|| exeName.contains("juce_lv2_helper")
 				|| exeName.contains("juce_au_helper");
@@ -72,6 +79,15 @@ namespace jucePluginEditorLib
 #endif
 		savePluginLoadPath();
 
+		loadGlobalSkinVariables();
+
+		// The resampler mode a state carries wins, but until one is loaded the plugin uses whatever the
+		// user picked last, and Mame HQ if they never picked anything. (BUG-10273, BUG-10277)
+		const auto resamplerMode = m_config.getIntValue("resamplerMode", static_cast<int>(synthLib::Resampler::Mode::MameHq));
+
+		if (resamplerMode >= 0 && resamplerMode < static_cast<int>(synthLib::Resampler::Mode::Count))
+			setResamplerMode(static_cast<synthLib::Resampler::Mode>(resamplerMode));
+
 		if (m_config.getBoolValue("enableMcpServer", false) && !isJuceHelperProcess())
 			startMcpServer();
 	}
@@ -80,6 +96,50 @@ namespace jucePluginEditorLib
 	{
 		stopMcpServer();
 		assert(!m_editorState && "call destroyEditorState in destructor of derived class");
+	}
+
+	void Processor::loadGlobalSkinVariables()
+	{
+		// Globals are stored one config key per variable, prefixed so they cannot collide with the
+		// plugin's own settings. Loading them does not report a change: nothing can be listening yet,
+		// and a skin must not see its own stored value arrive as if the user had just edited it.
+		std::map<std::string, pluginLib::SkinVariables::Value> values;
+
+		const auto& properties = m_config.getAllProperties();
+
+		for (int i = 0; i < properties.size(); ++i)
+		{
+			const auto key = properties.getAllKeys()[i].toStdString();
+
+			if (key.rfind(g_skinVariablePrefix, 0) != 0)
+				continue;
+
+			const auto name = key.substr(std::strlen(g_skinVariablePrefix));
+
+			if (name.empty())
+				continue;
+
+			values.insert_or_assign(name, pluginLib::SkinVariables::fromString(properties.getAllValues()[i].toStdString()));
+		}
+
+		auto& vars = getSkinVariables();
+
+		vars.setGlobalsFromStorage(std::move(values));
+
+		m_skinVariablesListener.set(vars.evChanged, [this](const std::string& _name, const pluginLib::SkinVariables::Scope _scope)
+		{
+			if (_scope != pluginLib::SkinVariables::Scope::Global)
+				return;
+
+			const auto key = juce::String(g_skinVariablePrefix + _name);
+
+			if (const auto* v = getSkinVariables().get(_name, _scope))
+				m_config.setValue(key, juce::String(pluginLib::SkinVariables::toString(*v)));
+			else
+				m_config.removeValue(key);
+
+			m_config.saveIfNeeded();
+		});
 	}
 
 	bool Processor::setLatencyBlocks(const uint32_t _blocks)

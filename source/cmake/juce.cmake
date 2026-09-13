@@ -112,6 +112,7 @@ target_compile_definitions(juce_plugin_modules PUBLIC
 	JUCE_USE_MP3AUDIOFORMAT=0
 	JUCE_USE_FLAC=0
 	JUCE_USE_WINDOWS_MEDIA_FORMAT=0
+	JUCE_DISPLAY_SPLASH_SCREEN=0  # Permitted by the JUCE 7 EULA because we ship under the GPLv3
 	JUCE_MODULE_AVAILABLE_juce_core=1
 	JUCE_MODULE_AVAILABLE_juce_audio_basics=1
 	JUCE_MODULE_AVAILABLE_juce_audio_utils=1
@@ -119,6 +120,19 @@ target_compile_definitions(juce_plugin_modules PUBLIC
 	JUCE_MODULE_AVAILABLE_juce_audio_processors=1
 	JUCE_MODULE_AVAILABLE_juce_cryptopgraphy=1
 )
+
+# ASIO is Steinberg's, and its SDK may not be redistributed, so JUCE only
+# builds the backend when the headers are present. Without this the audio
+# settings of every standalone offer DirectSound and WASAPI only.
+if(WIN32 AND ${CMAKE_PROJECT_NAME}_ASIO_SDK_PATH)
+	if(EXISTS "${${CMAKE_PROJECT_NAME}_ASIO_SDK_PATH}/common/iasiodrv.h")
+		message(STATUS "ASIO SDK found at ${${CMAKE_PROJECT_NAME}_ASIO_SDK_PATH}, enabling ASIO")
+		target_compile_definitions(juce_plugin_modules PUBLIC JUCE_ASIO=1)
+		target_include_directories(juce_plugin_modules PUBLIC "${${CMAKE_PROJECT_NAME}_ASIO_SDK_PATH}/common")
+	else()
+		message(WARNING "${CMAKE_PROJECT_NAME}_ASIO_SDK_PATH is set to '${${CMAKE_PROJECT_NAME}_ASIO_SDK_PATH}' but common/iasiodrv.h is not there, ASIO stays disabled")
+	endif()
+endif()
 
 target_include_directories(juce_plugin_modules
     INTERFACE
@@ -182,6 +196,17 @@ macro(createJucePlugin targetName productName isSynth plugin4CC binaryDataProjec
 
 	target_sources(${targetName} PRIVATE ${SOURCES} serverPlugin.cpp)
 
+	# serverPlugin.cpp lands in the shared code library, and nothing in the plugin calls the bridge entry points it
+	# exports, so the linker leaves it out of every plugin binary. Pull it in: the DSPBridge server can then load a regular
+	# plugin of the same version, not only the server plugin built next to it.
+	if(MSVC)
+		target_link_options(${targetName} INTERFACE /INCLUDE:bridgeDeviceCreate)
+	elseif(APPLE)
+		target_link_options(${targetName} INTERFACE -Wl,-u,_bridgeDeviceCreate)
+	else()
+		target_link_options(${targetName} INTERFACE -Wl,-u,bridgeDeviceCreate)
+	endif()
+
 	source_group("source" FILES ${SOURCES})
 
 	removeJuceDependencies(${targetName})
@@ -204,9 +229,11 @@ macro(createJucePlugin targetName productName isSynth plugin4CC binaryDataProjec
 		juce_plugin_modules
 	)
 
-	if(${isSynth})
-		createMacSetupScript(${productName})
-	endif()
+	# Every product needs the macOS quarantine removal script, synth or effect. Gating
+	# this on isSynth left every standalone effect without one: installMacSetupScript()
+	# below then expanded to install(FILES <empty>), which CMake accepts silently, so
+	# the Mac ZIPs shipped without a setup script and nothing ever complained.
+	createMacSetupScript(${productName})
 
 	set(clapFeatures "")
 	if(${isSynth})
@@ -324,7 +351,7 @@ macro(createJucePlugin targetName productName isSynth plugin4CC binaryDataProjec
 		set_tests_properties(${targetName}_AU_Validate PROPERTIES LABELS "PluginTest")
 	endif()
 
-	if(USE_Standalone)
+	if(USE_Standalone AND TARGET ${targetName}_Standalone)
 		add_dependencies(PluginFormat_Standalone ${targetName}_Standalone)
 	endif()
 
@@ -362,7 +389,8 @@ macro(createJucePlugin targetName productName isSynth plugin4CC binaryDataProjec
 		string(REPLACE "FX" "" productNameClean ${productName})
 		install(FILES "${CMAKE_SOURCE_DIR}/doc/changelog_split/changelog_${productNameClean}.txt"
 			DESTINATION .
-			COMPONENT ${productName}-${format})
+			COMPONENT ${productName}-${format}
+			OPTIONAL)
 	endforeach()
 
 	# --------- Server Plugin ---------

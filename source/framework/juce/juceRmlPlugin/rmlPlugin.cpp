@@ -1,6 +1,8 @@
 #include "rmlPlugin.h"
 
+#include "rmlLuaMidi.h"
 #include "rmlLuaParameters.h"
+#include "rmlLuaSkinVariables.h"
 #include "rmlParameterBinding.h"
 #include "rmlPluginContext.h"
 #include "rmlPluginDocument.h"
@@ -26,7 +28,11 @@ namespace rmlPlugin
 	RmlPlugin::~RmlPlugin()
 	{
 		if (auto* L = m_coreInstance.lua_state)
+		{
 			unregisterLuaParameters(L);
+			unregisterLuaSkinVariables(L);
+			unregisterLuaMidi(L);
+		}
 
 		Rml::UnregisterPlugin(m_coreInstance, this);
 	}
@@ -36,13 +42,21 @@ namespace rmlPlugin
 		m_contexts.emplace(_context, std::make_unique<RmlPluginContext>(_context, m_controller, _component));
 
 		if (auto* L = _context->GetCoreInstance().lua_state)
+		{
 			registerLuaParameters(L, m_controller);
+			registerLuaSkinVariables(L, m_controller);
+			registerLuaMidi(L, m_controller);
+		}
 	}
 
 	void RmlPlugin::OnContextDestroy(Rml::Context* _context)
 	{
 		if (auto* L = _context->GetCoreInstance().lua_state)
+		{
 			unregisterLuaParameters(L);
+			unregisterLuaSkinVariables(L);
+			unregisterLuaMidi(L);
+		}
 
 		m_documentBeingLoaded.reset();
 
@@ -87,7 +101,7 @@ namespace rmlPlugin
 			return;
 		}
 
-		it->second->elementCreated(_element);
+		it->second->elementCreated(_element, m_documentBeingLoaded != nullptr);
 
 		if (auto* input = dynamic_cast<Rml::ElementFormControlInput*>(_element))
 		{
@@ -110,6 +124,17 @@ namespace rmlPlugin
 				}
 			}
 		}
+	}
+
+	void RmlPlugin::OnElementDestroy(Rml::Element* _element)
+	{
+		// drop the element from any pending-binding list before the pointer
+		// goes stale (runtime-created elements can be destroyed while still
+		// waiting for their first bind, e.g. when a dynamic grid is rebuilt)
+		for (const auto& [context, pluginContext] : m_contexts)
+			pluginContext->elementDestroyed(_element);
+
+		Plugin::OnElementDestroy(_element);
 	}
 
 	void RmlPlugin::OnDocumentOpen(Rml::Context* _context, const Rml::String& _documentPath)

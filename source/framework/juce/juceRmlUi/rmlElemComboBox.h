@@ -7,6 +7,11 @@
 
 #include "RmlUi/Core/EventListener.h"
 
+namespace juce
+{
+	class LookAndFeel;
+}
+
 namespace juceRmlUi
 {
 	class ElemComboBox : public ElemValue, Rml::EventListener
@@ -32,6 +37,10 @@ namespace juceRmlUi
 
 		void ProcessEvent(Rml::Event& _event) override;
 		void onClick(const Rml::Event& _event);
+		// The list in its own window instead of inside the document, so it can extend past the
+		// window and scroll rather than wrap into columns. Selected by the RML attribute
+		// popup="window"; the default keeps the skinnable in-document menu.
+		void openPopupWindow();
 		void onMouseScroll(const Rml::Event& _event);
 
 		void setSelectedIndex(size_t _index, bool _sendChangeEvent = true);

@@ -9,6 +9,7 @@
 #include "synthLib/deviceException.h"
 #include "synthLib/midiToSysex.h"
 
+#include <cctype>
 #include <cstring>
 
 #include "dspMemoryPatches.h"
@@ -413,9 +414,35 @@ namespace virusLib
 
 			// replace preset name, that is usually just 'Untitled' with the filename
 			auto newPresetName = baseLib::filesystem::stripExtension(_filename);
-			auto firstSpacePos = newPresetName.find_first_of(' ');
+
+			// Factory files are named after their location in the bank, "A29 Darkroom3", and only
+			// the part behind that prefix is the patch name. Other banks are not named that way at
+			// all - dropping everything before the first space turns "Autobend BC" into "BC" - so
+			// only strip a leading token that actually looks like a bank and program number.
+			const auto firstSpacePos = newPresetName.find_first_of(' ');
+
 			if (firstSpacePos != std::string::npos && firstSpacePos < newPresetName.size() - 1)
-				newPresetName = newPresetName.substr(firstSpacePos + 1);
+			{
+				const auto prefix = newPresetName.substr(0, firstSpacePos);
+
+				auto isBankAndProgram = [](const std::string& _prefix)
+				{
+					size_t i = 0;
+					while (i < _prefix.size() && std::isalpha(static_cast<unsigned char>(_prefix[i])))
+						++i;
+					if (i == 0 || i > 2 || i == _prefix.size())
+						return false;
+					for (size_t k = i; k < _prefix.size(); ++k)
+					{
+						if (!std::isdigit(static_cast<unsigned char>(_prefix[k])))
+							return false;
+					}
+					return true;
+				};
+
+				if (isBankAndProgram(prefix))
+					newPresetName = newPresetName.substr(firstSpacePos + 1);
+			}
 
 			synthLib::SysexBuffer data{_data.begin() + pos, _data.begin() + pos + presetSize};
 
@@ -628,6 +655,13 @@ namespace virusLib
 		else
 		{
 			conf.aguSupportBitreverse = false;
+
+			// Virus A OS 2.52 ends a DO loop with a jsr, which the 56300 manual calls an
+			// undefined operation but real silicon executes. Without this the loop is never
+			// retired and the DSP derails into a garbage PC while still booting. Verified on
+			// 2.52, the whole 2.5x range is assumed to share it. Later OSs contain the pattern
+			// too but not on a path that derails, so keep them as they are.
+			conf.supportBranchAtLoopEnd = _rom.getOsVersion().find("v25") == 0;
 		}
 
 		jit.setConfig(conf);

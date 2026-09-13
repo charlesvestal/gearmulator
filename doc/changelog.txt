@@ -1,5 +1,379 @@
 Release Notes
 
+
+2.2.20:
+
+Framework:
+
+- [Fix] Switching the part through the MCP server left Vavra, Xenia, Osirus
+        and OsTIrus showing the old part: the part selection did not move and
+        the patch manager kept targeting the previous part.
+
+- [Fix] The FX versions of OsTIrus, Vavra and Xenia did not show their device
+        specific settings, such as the voice expansion option of Vavra and Xenia.
+
+- [Fix] The DSP Bridge server ignored the plugins folder set in its
+        configuration and only loaded plugins from the folder next to its
+        executable.
+
+- [Fix] The DSP Bridge server still started a device from a ROM that was
+        damaged while being sent to it.
+
+- [Imp] BUG-10327 The DSP Bridge server can now run a device from a regular
+        plugin, not only from the server plugins that come with it. The
+        plugin has to be the same version as the one in the DAW, and goes
+        into the server's plugins folder.
+
+- [Imp] If the DSP Bridge server cannot create the device, the plugin now says
+        why, for example that the server has no plugin of that version,
+        instead of showing "Error code 4".
+
+- [Fix] BUG-10269 Dragging any edge of the plugin window other than a corner
+        made the interface smaller and never larger again. The fixed aspect
+        ratio was resolved from the proposed size alone, which always corrects
+        the larger of the two dimensions - exactly the one an edge drag
+        changes.
+
+- [Fix] VST2 builds that use the fst fallback, which steps in when the
+        Steinberg SDK is not present, corrupted the heap the first time the
+        host asked for the speaker arrangement. Every channel count was
+        affected, a mono bus included, and it could take down the plugin or
+        the host.
+
+- [Fix] Clock, start/stop, program change and channel pressure coming from the
+        host carried whatever bytes happened to follow them in memory: three
+        bytes were read from every message, however short it is.
+
+- [Fix] SysEx that reaches the plugin in pieces was handed to the emulation
+        twice, once reassembled and once as the raw fragments, which a
+        firmware can read as channel data.
+
+- [Fix] SysEx from a host that frames it twice lost its start byte instead of
+        the surplus end byte, leaving a headless message behind.
+
+- [Fix] On macOS, the packages of the standalone effect plugins never
+        contained the script that removes the quarantine flag.
+
+Vavra/Xenia:
+
+- [Fix] The patch manager saw every patch as a duplicate of every other one,
+        because Vavra and Xenia never computed the fingerprint it compares:
+        "Hide duplicates (by hash)" left a single patch, and finding a patch by
+        its content matched all of them. Tags, favourites and renames saved
+        before are kept. Once they are saved again by this version, older
+        versions no longer show them.
+
+Xenia:
+
+- [Fix] The dialog shown in demo mode was titled Vavra.
+
+
+2.2.19:
+
+Framework:
+
+- [Fix] Closing a window while one of its drop-down or context menus was
+        still open could crash. The menu removed itself from a document that
+        was already tearing down, where every child has been detached from
+        its parent before any of them is destroyed.
+
+- [Fix] On macOS, the Metal renderer read the window and view geometry from
+        its own render thread. AppKit is not thread-safe, and doing so while
+        the message thread rearranges windows - reloading a skin, closing a
+        settings window - can corrupt state that only fails much later, in an
+        unrelated redraw. The geometry is now taken on the message thread.
+
+- [Fix] On macOS, the interface could freeze or stutter while its window was
+        hidden or covered by another one: the Metal render thread waited for
+        a drawable while holding the UI lock, up to a second at a time, and
+        the message thread starved waiting for it. And once that wait timed
+        out, the frame was dropped without telling the update loop, which
+        then waited for it forever - the window never updated again.
+
+- [Fix] On Windows and Linux, the OpenGL thread could draw the interface
+        while the message thread was changing it, without any lock between
+        them. The redraw juce requests on a resize took that path.
+
+- [Fix] With software rendering forced on Windows and Linux, the interface
+        was drawn from the top left corner of the window rather than at the
+        editor's position, so in a standalone it covered the title bar and
+        lost its bottom rows.
+
+- [Fix] After falling back from a software OpenGL rasterizer to the built-in
+        software renderer, the interface stopped updating.
+
+- [Fix] The DSP Bridge could crash or freeze the plugin, most often while a
+        project was being saved or when the connection to the server stalled.
+
+- [Fix] Picking a skin or a renderer from a menu could crash: choosing it closes
+        the window the menu itself lives in, and the menu kept working with what
+        was already gone.
+
+- [Fix] After the renderer changed, anything drawn from a cached snapshot - a box
+        shadow, for example - stayed invisible for the rest of the session.
+
+- [Fix] Keys held down while the window lost focus stayed down on Linux, and a
+        key that auto-repeated was reported as released once per repeat.
+
+- [Fix] The plugin told the host its latency from the audio thread, once per
+        block. Hosts answer that by suspending and re-preparing the plugin, so
+        playback could be interrupted at any moment.
+
+- [Fix] The interface could stall for as long as a frame took to draw, with
+        mouse and keyboard input queuing up behind it, and a redraw that called
+        back into the renderer could lock up completely.
+
+88emuPlayer:
+
+- [Fix] Selecting ASIO now waits for an explicit output-device choice,
+        avoiding crashes from automatically loading an unsuitable driver.
+        Opening the driver's control panel no longer uses a deleted device.
+
+- [Fix] With software rendering forced, the interface was drawn into the top
+        left corner of the window on Windows displays running at a scaling
+        other than 100%, and mouse positions were off by the same factor. The
+        software renderer sized its output in logical pixels while the image
+        it draws into is sized in physical ones.
+
+- [Fix] On the SC-8850, the front panel could stop responding after a while
+        of playing a song: PART < and PART > did nothing, or a single press
+        switched ALL mode on and off. The emulated CPU delivered an interrupt
+        the firmware had just requested up to one audio sample late, and in
+        that gap the firmware's own task scheduler lost the task that times
+        the panel keys. Interrupts now arrive right after the instruction
+        that requested them.
+
+- [Fix] Panel switches are released when the window loses focus, so a stuck
+        switch can no longer turn every later press into a key combination.
+
+- [Fix] On the SC-88 and SC-88Pro, Display Letter and Display Dot Data
+        messages were ignored: the emulated sub-MCU only passed SysEx with
+        the GS model ID through to the main CPU, and the display messages
+        use model ID 45H. Songs that draw on the level-meter dots now do.
+
+- [Fix] On the SC-55mkII, a dense SysEx stream such as a display dot
+        animation produced "Check Sum Error" and "DT1 Data Error" every few
+        seconds. The emulated sub-MCU could hand the main CPU the same byte
+        twice when its periodic wake-up fell between the CPU reading the
+        status and reading the data.
+
+- [Fix] On the SC-88 and SC-88VL, a song that follows its GS Reset with a
+        burst of parameter SysEx without the pause the GS spec asks for could
+        lock the module up: no sound, no panel. The emulated MIDI wire
+        delivered such messages about a fifth faster than a real cable can,
+        which drained the firmware's transfer buffers while it was still
+        busy with the reset. SysEx is now paced by its full wire length.
+
+- [Fix] Stopping or pausing a song left notes hanging on the SC-8850's part
+        groups C and D, and so did removing the song that was playing. Panic
+        and the GM/GS reset buttons reached only groups A and B as well. The
+        player silenced two MIDI ports where a song can address four.
+
+- [Fix] The player no longer sends MIDI clock to the emulated module.
+
+- [Fix] On Linux the data and ROM folder was $HOME/Documents/The Usual
+        Suspects instead of the XDG location the other plugins use. It is now
+        $XDG_DATA_HOME (or $HOME/.local/share); the old folder is still read
+        so an existing installation keeps finding its ROMs.
+
+- [Fix] The MIDI settings no longer offer "Enable Virtual Port" on Windows.
+        PortMidi can only create virtual endpoints on macOS and Linux, so the
+        switch never did anything and left a polling thread running.
+
+- [Fix] Added missing ASIO support.
+
+- [Imp] "Force software rendering" now takes effect in the settings window as
+        well, not only in the panel. Until now the settings kept drawing with
+        the old renderer until they were closed and reopened.
+
+- [Imp] The drop-down lists in the audio and MIDI settings open in a window of
+        their own. They are no longer cut off at the edge of the settings
+        dialog, and a long list such as the buffer sizes scrolls instead of
+        spreading into columns across the whole page.
+
+- [Imp] MIDI settings: the list of MIDI inputs is three times as tall, with one
+        compact line per device, and the note about virtual MIDI ports on
+        Windows sits below the list instead of crowding the output selector.
+
+- [Fix] Fixed midi receive in the high level sub mcu emulation with midi files
+        that send custom LCD messages.
+
+- [Imp] ROM images are now identified by their size and content instead of by
+        filename, and subfolders of a ROM search path are searched too. Dumps
+        can be renamed or kept in an unsorted collection, either byte order of
+        a mask ROM is accepted, and a truncated or unrelated file of the right
+        size can no longer be mistaken for a ROM.
+
+- [Imp] A device can only be selected once every ROM it needs is present.
+        Incomplete ones are greyed out instead of failing when picked, the
+        first complete device is used when the configured one is unavailable,
+        and the missing-ROM notice names each image with its size and hash.
+
+- [Imp] Added icon for the app.
+
+
+2.2.18:
+
+88emuPlayer:
+
+- [New] First internal release.
+
+
+2.2.17:
+
+Framework:
+
+- [Fix] BUG-10308 Skins: an animation did nothing at all when its keyframes
+        name contained an uppercase letter, because the name was folded to
+        lower case before it was looked up. Keyframe names are now case
+        sensitive, the same as in CSS.
+
+- [New] BUG-10200 Skins can react to notes being played. A skin script can
+        now register for note on and note off and draw a keyboard, a velocity
+        meter or an activity indicator, which was impossible before because
+        notes go straight to the emulated hardware and never reach the
+        parameter API. Notes are reported whatever their source and before
+        MIDI Learn can consume them, and a note on with velocity 0 is
+        reported as the note off it means. See doc/lua_scripting.md.
+
+- [New] BUG-10302 Skins can store their own variables. A skin can now keep
+        state the synth knows nothing about, such as which of its knobs it
+        has linked together, in one of two scopes: per instance, saved and
+        restored with the host project, or global, shared by every instance
+        through the plugin config. Reading without naming a scope answers
+        from the instance and falls back to the global, so a skin can ship a
+        default and let a project override it. Values are numbers or strings
+        and a callback reports changes. See doc/lua_scripting.md.
+
+- [Imp] BUG-10273 BUG-10277 Mame HQ is now the default resampler mode, and
+        the mode is remembered. A mode stored in a project is still used for
+        that project; when a project does not carry one, the mode last
+        selected on the settings page applies, and Mame HQ if it was never
+        changed. Note that projects saved before this version did not store
+        the mode at all while it was set to Legacy, so those open in Mame HQ
+        now and need the mode set once if Legacy is wanted.
+
+- [Fix] BUG-10313 Preset files of other plugins failed to import when they
+        happened to contain an $f0 and an $f7 byte with arbitrary data in
+        between. Such a pair is not a sysex message, but it was read as one,
+        after which the importer considered the file parsed and never tried
+        the format the file actually is.
+
+Osirus:
+
+- [Fix] Virus A OS 2.52 could not be used at all. The ROM was rejected while
+        loading, because that OS carries one firmware chunk less than every
+        later one, and it also derailed the emulated DSP while booting, over
+        a loop construct that OS 2.80 no longer uses, leaving it silent.
+        Both the .mid update files and a flash dump of that OS now work.
+
+- [Fix] Presets imported from the TDM plugin lost their name if the file was
+        not named after its position in a factory bank. "A29 Darkroom3" is
+        imported as "Darkroom3" as before, but "Autobend BC" was imported as
+        "BC" and is now kept as it is.
+
+OsTIrus:
+
+- [New] BUG-10237 TrancyTI skin: a Multi page. The eleventh tab opens a
+        column per part with its volume, pan, transpose and detune, its low
+        and high key, MIDI channel, output and note steal priority, and its
+        enable switch, so the parts of a multi can be set up in one place
+        instead of one part at a time. The MIDI channel dropdown now reads
+        1 to 16 rather than 0 to 15. Making room for the tab made all eleven
+        of them a little narrower.
+
+- [Fix] BUG-10238 TrancyTI skin: the + and - markings around the SLOPE knob
+        of the filter, envelope 3, envelope 4 and amplifier envelopes were
+        the wrong way round. The panel had + on the left and - on the right,
+        while turning the knob to the right raises the value, as every other
+        skin shows it.
+
+Vavra:
+
+- [Fix] BUG-10184 Loading a Multi, Drum map or Arrangement asked the device to
+        send the dump straight back, which is how the editor stays in sync when
+        a single patch is loaded. With a whole arrangement going out at once the
+        device answers such a request with what it held when the request was
+        made, so late answers overwrote dumps that had only just been sent: the
+        first Multi loaded after opening the plugin did nothing at all, and an
+        arrangement lost a varying handful of its sixteen parts. Everything is
+        now read back once, after the last dump is out.
+
+- [Fix] BUG-10184 Drum maps are listed under the name they carry instead of all
+        being called "Drum Map", and a renamed one is saved and exported under
+        its new name.
+
+- [Fix] A Drum map that was loaded is now part of the state the host saves, so
+        it returns with the project instead of being lost.
+
+- [New] BUG-10184 Patch Manager now supports Multi, Arrangement and
+        Drum dumps alongside Singles. They are detected automatically
+        on file import and tagged via the new "Type" category. Loading
+        an Arrangement (Multi + 16 Singles) switches to Multi mode,
+        applies the Multi and distributes the 16 Singles into the
+        parts. Arrangements can be saved to user banks via the Save
+        menu. Dropping a Multi or Arrangement onto a Part Button
+        prompts for confirmation since it replaces more than one part.
+
+Xenia:
+
+- [Fix] BUG-10184 Loading a Multi or Arrangement asked the device to send the
+        dump straight back, and those answers arrived late enough to overwrite
+        what had just been sent, so the first Multi loaded after opening the
+        plugin did nothing. Everything is now read back once, after the last
+        dump is out, and the Singles of all parts are refreshed afterwards the
+        way Vavra already did it.
+
+- [New] BUG-10184 Patch Manager now supports Multi and Arrangement
+        dumps alongside Singles. They are detected automatically on
+        file import and tagged via the new "Type" category. Loading an
+        Arrangement (Multi + 8 Singles) switches to Multi mode, applies
+        the Multi and distributes the 8 Singles into the parts.
+        Arrangements can be saved to user banks via the Save menu.
+        Dropping a Multi or Arrangement onto a Part Button prompts for
+        confirmation since it replaces more than one part.
+
+2.2.16:
+
+Framework:
+
+- [Imp] BUG-10304 Skins can now animate on their own clock. A skin that
+        declares an onframe handler on its body receives a frame event
+        once per rendered frame, carrying the elapsed time and the time
+        since the previous frame, which is what an oscilloscope or a VU
+        meter needs. Until now the only way to loop an animation was to
+        chain a CSS transition into itself. The rate is capped at 60 Hz,
+        follows the refreshRateLimitHz config setting if one is present,
+        and drops to nothing while the editor is off screen or while no
+        skin asks for it. See doc/lua_scripting.md.
+
+OsTIrus:
+
+- [Fix] BUG-10276 The filter 1 mode buttons did not follow the loaded
+        patch. A patch that uses one of the analog modes still showed the
+        classic mode row with no button lit, both when loading a patch and
+        when stepping through patches, even though the correct mode was
+        active. Both rows now follow the parameter, and the AM button
+        switches to Analog 1 Pole while the CM button switches back to
+        Low Pass.
+
+2.2.15:
+
+Osirus:
+
+- [Fix] EMU-88 Multi mode: changing the MIDI channel, the volume or any
+        other per-part multi parameter of a part was ignored if another part
+        had previously been set to the same value, and only took effect
+        after changing it to a different value and back. These parameters
+        were wrongly treated as global settings, which also caused them to
+        be reported back to the editor as global settings of part 1.
+
+OsTIrus:
+
+- [Fix] Three spelling mistakes in the user interface: "ENVELOPER FOLLOWER"
+        in the effects section, "PHASE INT" in the oscillator section and
+        "TRANSPONSE" in the common parameters.
+
 2.2.14:
 
 Framework:

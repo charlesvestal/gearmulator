@@ -10,6 +10,7 @@
 #include "xtFrontPanel.h"
 #include "xtPatchManager.h"
 #include "xtSettingsDspAudio.h"
+#include "xtLib/xtMidiTypes.h"
 #include "xtWaveEditor.h"
 
 #include "jucePluginEditorLib/midiPorts.h"
@@ -60,9 +61,19 @@ namespace xtJucePlugin
 
 		addClick("SaveButton", [this](const Rml::Event& _event)
 		{
+			if (m_controller.isMultiMode())
+				m_controller.requestMulti(xt::LocationH::MultiDumpMultiEditBuffer, 0);
+
 			juceRmlUi::Menu menu;
 
-			const auto countAdded = getPatchManager()->createSaveMenuEntries(menu);
+			uint32_t countAdded = getPatchManager()->createSaveMenuEntries(menu, "Single");
+
+			if (m_controller.isMultiMode())
+			{
+				auto* pm = dynamic_cast<PatchManager*>(getPatchManager());
+				if (pm)
+					countAdded += pm->createSaveMenuEntries(menu, m_controller.getCurrentPart(), "Arrangement", PatchManager::g_userDataArrangement);
+			}
 
 			if(countAdded)
 				menu.runModal(_event);
@@ -118,7 +129,7 @@ namespace xtJucePlugin
 
 	std::pair<std::string, std::string> Editor::getDemoRestrictionText() const
 	{
-		return {"Vavra",
+		return {"Xenia",
 			"Xenia runs in demo mode\n"
 			"\n"
 			"The following features are disabled:\n"
@@ -138,13 +149,15 @@ namespace xtJucePlugin
 		return *m_parts;
 	}
 
-	void Editor::setCurrentPart(const uint8_t _part)
+	void Editor::onCurrentPartChanged(const uint8_t _part)
 	{
-		m_controller.setCurrentPart(_part);
+		jucePluginEditorLib::Editor::onCurrentPartChanged(_part);
 
-		jucePluginEditorLib::Editor::setCurrentPart(_part);
+		if(m_parts)
+			m_parts->updateUi();
 
-		m_frontPanel->getLcd()->refresh();
+		if(m_frontPanel)
+			m_frontPanel->getLcd()->refresh();
 	}
 
 	void Editor::changeWave(const int _step) const

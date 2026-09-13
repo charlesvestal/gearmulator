@@ -10,6 +10,8 @@
 #include "midiLearnTranslator.h"
 #include "midiports.h"
 #include "programChangeRouter.h"
+#include "midiNotifier.h"
+#include "skinVariables.h"
 
 #include "bridgeLib/types.h"
 
@@ -41,7 +43,7 @@ namespace synthLib
 
 namespace pluginLib
 {
-	class Processor : public juce::AudioProcessor
+	class Processor : public juce::AudioProcessor, juce::AsyncUpdater
 	{
 	public:
 		struct BinaryDataRef
@@ -91,7 +93,14 @@ namespace pluginLib
 		}
 
 		virtual bool setLatencyBlocks(uint32_t _blocks);
+		uint32_t getCurrentLatency();
 		virtual void updateLatencySamples();
+
+		// Telling the host about a latency change means calling back into it, which must not
+		// happen from the audio thread - a VST3 host answers restartComponent() by suspending
+		// and re-preparing the plugin, re-entering us from inside process(). The audio thread
+		// only compares two integers and hands the publishing to the message thread.
+		void handleAsyncUpdate() override;
 
 		virtual void saveCustomData(std::vector<uint8_t>& _targetBuffer);
 		virtual void saveChunkData(baseLib::BinaryStream& s);
@@ -155,6 +164,8 @@ namespace pluginLib
 		bool rebootDevice();
 
 		auto& getMidiPorts() { return m_midiPorts; }
+		auto& getSkinVariables() { return m_skinVariables; }
+		auto& getMidiNotifier() { return m_midiNotifier; }
 
 		static std::optional<std::pair<const char*, uint32_t>> findResource(const BinaryDataRef& _binaryData, const std::string& _filename);
 		std::optional<std::pair<const char*, uint32_t>> findResource(const std::string& _filename) const;
@@ -269,14 +280,17 @@ namespace pluginLib
 		uint32_t m_dspClockPercent = 100;
 		uint32_t m_dspThreads = 0;
 		float m_preferredDeviceSamplerate = 0.0f;
-		synthLib::Resampler::Mode m_resamplerMode = synthLib::Resampler::Mode::Legacy;
+		synthLib::Resampler::Mode m_resamplerMode = synthLib::Resampler::Mode::MameHq;
 		float m_hostSamplerate = 0.0f;
 		MidiPorts m_midiPorts;
+		SkinVariables m_skinVariables;
+		MidiNotifier m_midiNotifier;
 		BypassBuffer m_bypassBuffer;
 		DeviceType m_deviceType = DeviceType::Local;
 		std::string m_remoteHost;
 		uint32_t m_remotePort = 0;
 		bridgeLib::SessionId m_remoteSessionId;
+		uint32_t m_reportedLatency = 0;
 		synthLib::MidiRoutingMatrix m_midiRoutingMatrix;
 		std::string m_programName;
 		std::unique_ptr<MidiLearnTranslator> m_midiLearnTranslator;

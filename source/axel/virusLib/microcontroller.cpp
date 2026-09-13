@@ -400,11 +400,22 @@ bool Microcontroller::isPolyPressureForPageBEnabled() const
 	return m_globalSettings[MIDI_CONTROL_HIGH_PAGE] == 1;
 }
 
+bool Microcontroller::isMultiPartParameter(const uint8_t _param)
+{
+	return (_param >= PART_BANK_SELECT && _param <= PART_OUTPUT_SELECT) || (_param >= PART_ENABLE && _param <= PART_PROG_CHANGE_ENABLE);
+}
+
 bool Microcontroller::send(const Page _page, const uint8_t _part, const uint8_t _param, const uint8_t _value)
 {
 	std::lock_guard lock(m_mutex);
 
-	if(_page == globalSettingsPage())
+	// On the ABC family the global settings page is also the multi page, so it carries the per-part multi
+	// parameters as well. These are addressed by part and are not single global values: deduplicating them
+	// against m_globalSettings drops a write for one part just because another part already holds that value,
+	// and would also report them back as globals of part 0.
+	const auto isGlobalSetting = _page == globalSettingsPage() && !(_page == PAGE_C && isMultiPartParameter(_param));
+
+	if(isGlobalSetting)
 	{
 		if(m_globalSettings[_param] == _value)
 			return true;
@@ -1162,7 +1173,7 @@ void Microcontroller::addDSP(DspSingle& _dsp, bool _useEsaiBasedMidiTiming)
 {
 	m_hdi08.addHDI08(_dsp.getHDI08());
 	m_hdi08TxParsers.emplace_back(*this);
-	m_midiQueues.emplace_back(_dsp, m_hdi08.getQueue(m_hdi08.size()-1), _useEsaiBasedMidiTiming, m_rom.isTIFamily());
+	m_midiQueues.emplace_back(_dsp, m_hdi08.getQueue(m_hdi08.size()-1), _useEsaiBasedMidiTiming, m_rom.isTIFamily(), m_rom.getModel() == DeviceModel::A);
 }
 
 void Microcontroller::processHdi08Tx(std::vector<synthLib::SMidiEvent>& _midiEvents)

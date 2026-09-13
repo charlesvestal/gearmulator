@@ -1,5 +1,7 @@
 #pragma once
 
+#include <atomic>
+
 #include "frameRateLimiter.h"
 #include "juceRmlComponentConfig.h"
 #include "juceRmlDrag.h"
@@ -22,7 +24,6 @@ namespace Rml
 
 namespace juceRmlUi
 {
-	class LookAndFeel;
 	struct RmlInterfaces;
 	class Renderer;
 	class JuceRmlUi;
@@ -57,6 +58,8 @@ namespace juceRmlUi
 
 		baseLib::Event<RmlComponent*> evPreUpdate;
 		baseLib::Event<RmlComponent*> evPostUpdate;
+		// Fired when the component loses keyboard focus, after every key RmlUi still saw as held has been released.
+		baseLib::Event<RmlComponent*> evFocusLost;
 
 		using ContextCreatedCallback = std::function<void(RmlComponent&, Rml::Context&)>;
 		using DocumentLoadFailedCallback = std::function<void(RmlComponent&, Rml::Context&)>;
@@ -135,6 +138,10 @@ namespace juceRmlUi
 		static RmlComponent* fromElement(const Rml::Element* _element);
 
 		void enqueueUpdate();
+		// Call after a new renderer has been installed. Resources built from a layer snapshot
+		// cannot be carried over - replaying the snapshot on the new renderer would capture
+		// whatever layer happens to be current - so RmlUi has to build them again itself.
+		void onRendererChanged() const;
 
 		void enableDebugger(bool _enable);
 
@@ -155,6 +162,7 @@ namespace juceRmlUi
 		void destroyRmlContext();
 		void updateRmlContextDimensions();
 		void startNextFrameTimer();
+		bool dispatchFrameEvent();
 
 		Rml::Vector2i getRenderSize() const;
 
@@ -183,6 +191,10 @@ namespace juceRmlUi
 		std::vector<juce::KeyPress> m_pressedKeys;
 		float m_contentScale = 1.0f;
 		float m_currentRenderScale = 0.0f;
+		// Device pixels per logical pixel for the software renderer. OpenGL and
+		// Metal report this themselves; the software path has to be told, and
+		// the component transform chain does not carry it - see paint().
+		std::atomic<float> m_softwareRenderScale{1.0f};
 
 		std::mutex m_timerMutex;
 		std::mutex m_contextRenderMutex;
@@ -203,6 +215,7 @@ namespace juceRmlUi
 		JUCE_DECLARE_NON_MOVEABLE(RmlComponent)
 
 		double m_time = 0;
+		double m_lastFrameEventTime = 0;
 		float m_fps = 0;
 		float m_targetFPS = 0;
 
@@ -218,9 +231,6 @@ namespace juceRmlUi
 		juce::Image m_screenshot;
 		ScreenshotState m_screenshotState = ScreenshotState::NoScreenshot;
 		ScreenshotCallback m_screenshotCallback;
-
-		LookAndFeel* m_lookAndFeel = nullptr;
-		juce::Component* m_lookAndFeelParent = nullptr;
 
 		RmlComponentConfig m_config;
 

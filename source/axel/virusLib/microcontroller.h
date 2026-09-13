@@ -75,6 +75,7 @@ public:
 
 	void sendControlCommand(ControlCommand command, uint8_t value);
 private:
+	static bool isMultiPartParameter(uint8_t _param);
 	bool send(Page page, uint8_t part, uint8_t param, uint8_t value);
 	bool sendPreset(uint8_t program, const TPreset& _data, bool isMulti = false);
 	void writeHostBitsWithWait(uint8_t flag0, uint8_t flag1);

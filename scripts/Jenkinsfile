@@ -80,6 +80,11 @@ pipeline {
 			}
 		}
 	}
+	post {
+		always {
+			script { notifyDiscord() }
+		}
+	}
 }
 
 def genericSh(cmd)
@@ -117,7 +122,7 @@ def buildFxPlugins()
 
 def cmakeBuildDir()
 {
-	return "${CMAKE_BUILD_DIR}_${params.Branch}"
+	return "${CMAKE_BUILD_DIR}_${params.Branch.replace('/', '_')}"
 }
 
 def doCheckout()
@@ -131,8 +136,16 @@ def doCheckout()
 			, parentCredentials: false
 			, recursiveSubmodules: true
 			, reference: ''
-			, trackingSubmodules: false]]
-			, userRemoteConfigs: [[ url: GIT_URL ]]
+			, trackingSubmodules: false]
+			// Fetch ONLY the branch we build. The default refspec pulls every branch of the repo, and
+			// git's fetch.recurseSubmodules=on-demand then fetches the submodule commits each newly
+			// fetched superproject commit points at. One branch whose submodule commit was never pushed
+			// ("upload-pack: not our ref") therefore failed the fetch, and with it the checkout of every
+			// build on every agent, no matter which branch it was building. honorRefspec applies the
+			// narrow refspec to the initial clone too; tags are not used by this pipeline and pulling
+			// them would drag in unrelated commits the same way.
+			, [$class: 'CloneOption', honorRefspec: true, noTags: true, shallow: false, depth: 0, reference: '', timeout: 30]]
+			, userRemoteConfigs: [[ url: GIT_URL, refspec: "+refs/heads/${params.Branch}:refs/remotes/origin/${params.Branch}" ]]
 		]
 	)
 }
@@ -171,7 +184,7 @@ def doPack()
 	dir(cmakeBuildDir()) {
 		genericSh 'cmake -P ../../scripts/pack.cmake'
 	}
-	if("${params.UploadFolder}" == "donators") {
+	if("${params.UploadFolder}".contains("donators")) {
 		genericSh "cmake -Dgearmulator_BINARY_DIR=${WORKSPACE}/${buildDir} -P scripts/packagesource.cmake"
 	}
 }
@@ -212,7 +225,41 @@ def doGitHub()
 {
     def buildDir = cmakeBuildDir()
 
-	if("${params.UploadFolder}" == "beta" || "${params.UploadFolder}" == "") {
+	if("${params.UploadFolder}".contains("beta") || "${params.UploadFolder}" == "") {
 		genericSh "cmake -Dgearmulator_SOURCE_DIR=${WORKSPACE} -Dgearmulator_BINARY_DIR=${WORKSPACE}/${buildDir} -P scripts/deployGitHub.cmake"
 	}
+}
+
+def notifyDiscord()
+{
+	def result = currentBuild.currentResult
+	def color  = result == 'SUCCESS' ? 3066993 : (result == 'ABORTED' ? 9807270 : 15158332)
+
+	// writeJSON rather than hand built JSON on the command line: the payload goes to a file,
+	// so there is no cmd-vs-sh quoting to get wrong on the windows/linux/mac agents
+	writeJSON file: 'discord.json', json: [
+		username: 'jenkins',
+		embeds: [[
+			title: currentBuild.fullDisplayName,
+			url:   env.BUILD_URL,
+			color: color,
+			fields: [
+				[name: 'Result',   value: result,            inline: true],
+				[name: 'Platform', value: params.AgentLabel, inline: true],
+				[name: 'Duration', value: currentBuild.durationString.replace(' and counting', ''), inline: true],
+				[name: 'Branch',   value: params.Branch,     inline: true],
+				[name: 'Synths',   value: params.Synths,     inline: false]
+			]
+		]]
+	]
+
+	// a discord outage must never turn a green build red
+	try {
+		withCredentials([string(credentialsId: 'discord_build_webhook', variable: 'DISCORD_HOOK')]) {
+			genericSh 'curl -sS -H "Content-Type: application/json" -d @discord.json ' + formatArg('DISCORD_HOOK')
+		}
+	} catch(e) {
+		echo "Discord notification failed: ${e}"
+	}
+	deleteFile('discord.json')
 }

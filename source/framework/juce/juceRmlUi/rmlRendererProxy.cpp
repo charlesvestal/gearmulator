@@ -209,15 +209,16 @@ namespace juceRmlUi
 
 	Rml::LayerHandle RendererProxy::PushLayer()
 	{
-		if (!m_config.canLayer)
+		if (!canLayer())
 			return {};
 
 		auto dummyHandle = createDummyHandle();
 
-		addRenderFunction(dummyHandle, [this, dummyHandle]
+		// Deliberately not registered for context restore. A layer only exists within the render
+		// pass that pushed it, so replaying the push on a new renderer would put a handle on the
+		// stack that the pass never asked for, on top of the one already there.
+		addRenderFunction([this, dummyHandle]
 		{
-			if (exists(dummyHandle))
-				return;
 			auto handle = m_renderer->PushLayer();
 			addHandle<HandleLayer>(dummyHandle, handle);
 			m_layerHandles.push(dummyHandle);
@@ -227,7 +228,7 @@ namespace juceRmlUi
 
 	void RendererProxy::CompositeLayers(Rml::LayerHandle _source, Rml::LayerHandle _destination, Rml::BlendMode _blendMode, const Rml::Span<const Rml::CompiledFilterHandle> _filters)
 	{
-		if (!m_config.canLayer)
+		if (!canLayer())
 			return;
 
 		auto f = copySpan(_filters);
@@ -261,12 +262,20 @@ namespace juceRmlUi
 
 	void RendererProxy::PopLayer()
 	{
-		if (!m_config.canLayer)
+		if (!canLayer())
 			return;
 
 		addRenderFunction([this]
 		{
+			// The push that belongs to this pop can be missing: canLayer is read without a lock
+			// and openGLContextClosing() flips it from the GL thread, so a pass can have its
+			// PushLayer suppressed and its PopLayer let through. Leave the renderer's own stack
+			// alone in that case rather than popping ours empty.
+			if (m_layerHandles.empty())
+				return;
+
 			m_renderer->PopLayer();
+
 			const auto dummy = m_layerHandles.top();
 			m_layerHandles.pop();
 			removeHandle(dummy);
@@ -275,7 +284,7 @@ namespace juceRmlUi
 
 	Rml::TextureHandle RendererProxy::SaveLayerAsTexture()
 	{
-		if (!m_config.canLayer)
+		if (!canLayer())
 			return {};
 
 		auto dummyHandle = createDummyHandle();
@@ -291,7 +300,7 @@ namespace juceRmlUi
 
 	Rml::CompiledFilterHandle RendererProxy::SaveLayerAsMaskImage()
 	{
-		if (!m_config.canLayer || !m_config.canFilter)
+		if (!canLayer() || !canFilter())
 			return {};
 
 		auto dummyHandle = createDummyHandle();
@@ -307,7 +316,7 @@ namespace juceRmlUi
 
 	Rml::CompiledFilterHandle RendererProxy::CompileFilter(const Rml::String& _name, const Rml::Dictionary& _parameters)
 	{
-		if (!m_config.canFilter)
+		if (!canFilter())
 			return {};
 
 		auto dummyHandle = createDummyHandle();
@@ -323,7 +332,7 @@ namespace juceRmlUi
 
 	void RendererProxy::ReleaseFilter(Rml::CompiledFilterHandle _filter)
 	{
-		if (!m_config.canFilter)
+		if (!canFilter())
 			return;
 
 		addRenderFunction([this, _filter]
@@ -338,7 +347,7 @@ namespace juceRmlUi
 
 	Rml::CompiledShaderHandle RendererProxy::CompileShader(const Rml::String& _name, const Rml::Dictionary& _parameters)
 	{
-		if (!m_config.canShader)
+		if (!canShader())
 			return {};
 
 		auto dummyHandle = createDummyHandle();
@@ -354,7 +363,7 @@ namespace juceRmlUi
 
 	void RendererProxy::RenderShader(Rml::CompiledShaderHandle _shader, const Rml::CompiledGeometryHandle _geometry, const Rml::Vector2f _translation, const Rml::TextureHandle _texture)
 	{
-		if (!m_config.canShader)
+		if (!canShader())
 			return;
 
 		addRenderFunction([this, _shader, _geometry, _translation, _texture]
@@ -371,7 +380,7 @@ namespace juceRmlUi
 
 	void RendererProxy::ReleaseShader(Rml::CompiledShaderHandle _shader)
 	{
-		if (!m_config.canShader)
+		if (!canShader())
 			return;
 
 		addRenderFunction([this, _shader]
@@ -407,6 +416,11 @@ namespace juceRmlUi
 			if (!m_renderer)
 				return false;
 
+			// Take the queue away and run it with the lock released. Holding it for the whole
+			// frame blocks the message thread in finishFrame() and setRenderer() for exactly as
+			// long as the frame takes, so every mouse and key event queues behind it. It also
+			// deadlocks any render function that reaches back into the proxy, because the mutex
+			// is not recursive, and lets one that enqueues more work invalidate the iteration.
 			std::swap(renderFunctions, m_renderFunctions);
 		}
 
@@ -477,10 +491,15 @@ namespace juceRmlUi
 			}
 
 			m_handles.clear();
+
+			// Pass-scoped, and the pass it belonged to cannot survive the switch
+			m_layerHandles = {};
 		}
 
 		m_renderer = _renderer;
-		m_config = _config;
+		m_canLayer.store(_config.canLayer, std::memory_order_relaxed);
+		m_canFilter.store(_config.canFilter, std::memory_order_relaxed);
+		m_canShader.store(_config.canShader, std::memory_order_relaxed);
 
 		if (m_renderer)
 		{

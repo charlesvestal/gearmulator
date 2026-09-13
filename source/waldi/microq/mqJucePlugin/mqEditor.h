@@ -44,7 +44,10 @@ namespace mqJucePlugin
 		}
 
 	private:
+		void onCurrentPartChanged(uint8_t _part) override;
+
 		void savePreset(const pluginLib::FileType& _type);
+		void saveArrangement(const pluginLib::FileType& _type);
 
 		void onBtSave(const Rml::Event& _event);
 		void onBtPresetPrev() const;

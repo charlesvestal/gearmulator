@@ -18,6 +18,7 @@
 #include "synthLib/deviceException.h"
 #include "synthLib/os.h"
 #include "synthLib/midiBufferParser.h"
+#include "synthLib/midiToSysex.h"
 #include "synthLib/romLoader.h"
 #include "synthLib/wavWriter.h"
 
@@ -67,6 +68,10 @@ namespace pluginLib
 	void Processor::addMidiEvent(const synthLib::SMidiEvent& _ev)
 	{
 		audioCaptureCheckArm(_ev);
+
+		// before midi learn or the program change router get a chance to swallow the event: a skin
+		// drawing a keyboard wants to see what was played either way
+		m_midiNotifier.onMidiEvent(_ev);
 
 		// Process through MIDI Learn translator first
 		if (_ev.source != synthLib::MidiEventSource::Device)
@@ -118,9 +123,7 @@ namespace pluginLib
 			const auto* rawData = _message.getRawData();
 			if (count >= 1 && count <= 3)
 			{
-				sm.a = rawData[0];
-				sm.b = count > 1 ? rawData[1] : 0;
-				sm.c = count > 2 ? rawData[2] : 0;
+				synthLib::setShortMessage(sm, rawData, static_cast<size_t>(count));
 			}
 			else
 			{
@@ -232,6 +235,8 @@ namespace pluginLib
 			return onDeviceInvalid(_device);
 		}));
 
+		m_plugin->setResamplerMode(m_resamplerMode);
+
 		return *m_plugin;
 	}
 
@@ -274,12 +279,22 @@ namespace pluginLib
 		return true;
 	}
 
+	uint32_t Processor::getCurrentLatency()
+	{
+		return getProperties().isSynth ? getPlugin().getLatencyMidiToOutput() : getPlugin().getLatencyInputToOutput();
+	}
+
 	void Processor::updateLatencySamples()
 	{
-		if(getProperties().isSynth)
-			setLatencySamples(getPlugin().getLatencyMidiToOutput());
-		else
-			setLatencySamples(getPlugin().getLatencyInputToOutput());
+		m_reportedLatency = getCurrentLatency();
+		setLatencySamples(static_cast<int>(m_reportedLatency));
+	}
+
+	void Processor::handleAsyncUpdate()
+	{
+		// Order matters: switching the resampler moves the latency, so publish it afterwards.
+		getPlugin().applyPendingDeviceSamplerate();
+		updateLatencySamples();
 	}
 
 	void Processor::saveCustomData(std::vector<uint8_t>& _targetBuffer)
@@ -347,13 +362,16 @@ namespace pluginLib
 			s.write(m_preferredDeviceSamplerate);
 		}
 
-		if(m_resamplerMode != synthLib::Resampler::Mode::Legacy)
 		{
+			// Always written, including Legacy. The default is Mame HQ now, so a state that omits the
+			// chunk cannot be read as "Legacy was chosen" any more - it means the state predates this
+			// and the setting falls back to the one the user last picked. (BUG-10273, BUG-10277)
 			baseLib::ChunkWriter cw(s, "RSMP", 1);
 			s.write(static_cast<uint8_t>(m_resamplerMode));
 		}
 
 		m_midiPorts.saveChunkData(s);
+		m_skinVariables.saveChunkData(s);
 		m_midiRoutingMatrix.saveChunkData(s);
 
 		if (m_midiLearnTranslator)
@@ -415,6 +433,7 @@ namespace pluginLib
 		});
 
 		m_midiPorts.loadChunkData(_cr);
+		m_skinVariables.loadChunkData(_cr);
 		m_midiRoutingMatrix.loadChunkData(_cr);
 		
 		if (m_midiLearnTranslator)
@@ -517,7 +536,12 @@ namespace pluginLib
 	void Processor::setResamplerMode(const synthLib::Resampler::Mode _mode)
 	{
 		m_resamplerMode = _mode;
-		getPlugin().setResamplerMode(_mode);
+
+		// Do not reach for getPlugin() here: this is set from the config before anything else has
+		// touched the plugin, and booting a device from there would cost seconds at construction.
+		// A plugin created later picks the mode up in getPlugin().
+		if (m_plugin)
+			m_plugin->setResamplerMode(_mode);
 	}
 
 	std::optional<std::pair<const char*, uint32_t>> Processor::findResource(const BinaryDataRef& _binaryData,	const std::string& _filename)
@@ -806,24 +830,12 @@ namespace pluginLib
 				ev.sysex.resize(message.getRawDataSize());
 				memcpy(ev.sysex.data(), message.getRawData(), ev.sysex.size());
 
-				// Juce bug? Or VSTHost bug? Juce inserts f0/f7 when converting VST3 midi packet to Juce packet, but it's already there
-				if(ev.sysex.size() > 1)
-				{
-					if(ev.sysex.front() == 0xf0 && ev.sysex[1] == 0xf0)
-						ev.sysex.erase(ev.sysex.begin());
-
-					if(ev.sysex.size() > 1)
-					{
-						if(ev.sysex[ev.sysex.size()-1] == 0xf7 && ev.sysex[ev.sysex.size()-2] == 0xf7)
-							ev.sysex.erase(ev.sysex.begin());
-					}
-				}
+				// guards against hosts that hand over sysex framed twice (f0 f0 ... f7 f7)
+				synthLib::MidiToSysex::removeDuplicateFraming(ev.sysex);
 			}
 			else
 			{
-				ev.a = message.getRawData()[0];
-				ev.b = message.getRawDataSize() > 0 ? message.getRawData()[1] : 0;
-				ev.c = message.getRawDataSize() > 1 ? message.getRawData()[2] : 0;
+				synthLib::setShortMessage(ev, message.getRawData(), static_cast<size_t>(message.getRawDataSize()));
 			}
 
 			ev.offset = std::max(0, metadata.samplePosition);
@@ -834,6 +846,7 @@ namespace pluginLib
 		midiMessages.clear();
 
 		bool isPlaying = true;
+		bool hasPpqPosition = false;
 		float bpm = 0.0f;
 		float ppqPos = 0.0f;
 
@@ -851,11 +864,17 @@ namespace pluginLib
 				if(pos->getPpqPosition())
 				{
 					ppqPos = static_cast<float>(*pos->getPpqPosition());
+					hasPpqPosition = true;
 				}
 			}
 		}
 
-		getPlugin().process(inputs, outputs, numSamples, bpm, ppqPos, isPlaying);
+		getPlugin().process(inputs, outputs, numSamples, bpm, ppqPos, isPlaying, hasPpqPosition);
+
+		// Both checks are plain atomic loads, cheap enough per block. The work they stand for
+		// belongs to the message thread, see handleAsyncUpdate().
+		if(getCurrentLatency() != m_reportedLatency || getPlugin().hasPendingDeviceSamplerate())
+			triggerAsyncUpdate();
 
 		applyOutputGain(outputs, numSamples);
 
@@ -1184,12 +1203,33 @@ namespace pluginLib
 
 	bool Processor::rebootDevice()
 	{
+		// Make sure the plugin (and with it the device it wraps) exists before we
+		// build its replacement, otherwise the lazy creation below would boot a
+		// device just to throw it away again.
+		auto& plugin = getPlugin();
+
 		try
 		{
-			synthLib::Device* device = createDevice();
-			getPlugin().setDevice(device);
+			// Recreate the device type that is actually in use. Creating a local
+			// device unconditionally would silently drop a remote (bridged)
+			// session while m_deviceType still claims Remote.
+			synthLib::Device* device = createDevice(m_deviceType);
+			if(!device)
+				return false;
+
+			// Carry over what lives on the processor rather than in the device
+			// state blob. Latency and samplerate are reapplied by setDevice(),
+			// which also transfers the state of the device being replaced.
+			device->setDspClockPercent(m_dspClockPercent);
+
+			plugin.setDevice(device);
 			(void)m_device.release();
 			m_device.reset(device);
+
+			// The same resync a DAW restore performs: the editor is talking to a
+			// device that just came up fresh, so it has to re-read it.
+			if(hasController())
+				getController().onStateLoaded();
 
 			return true;
 		}

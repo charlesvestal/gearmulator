@@ -31,6 +31,7 @@
 #include "juceRmlUi/juceRmlComponentConfig.h"
 
 #include "juceUiLib/messageBox.h"
+#include "juceUiLib/legalDisclaimer.h"
 
 #include "synthLib/os.h"
 #include "synthLib/sysexToMidi.h"
@@ -59,6 +60,11 @@ namespace jucePluginEditorLib
 		, m_skin(std::move(_skin))
 		, m_rmlInterfaces(*this)
 	{
+		m_onCurrentPartChanged.set(m_processor.getController().onCurrentPartChanged, [this](const uint8_t& _part)
+		{
+			onCurrentPartChanged(_part);
+		});
+
 		showDisclaimer();
 	}
 
@@ -373,11 +379,21 @@ namespace jucePluginEditorLib
 
 	void Editor::setCurrentPart(const uint8_t _part)
 	{
-		getProcessor().getController().setCurrentPart(_part);
+		// A change comes back through onCurrentPartChanged via the controller's event, the same way as one
+		// made anywhere else. Selecting the current part again fires nothing, so apply it directly - that still
+		// re-selects the part's patch in the patch manager.
+		if(!getProcessor().getController().setCurrentPart(_part))
+			onCurrentPartChanged(_part);
+	}
+
+	void Editor::onCurrentPartChanged(const uint8_t _part)
+	{
 		if(m_patchManager)
 			m_patchManager->setCurrentPart(_part);
 
-		m_pluginDataModel->set("currentPart", std::to_string(_part));
+		// created with the RmlUi context, which a part change can precede
+		if(m_pluginDataModel)
+			m_pluginDataModel->set("currentPart", std::to_string(_part));
 	}
 
 	void Editor::showDisclaimer() const
@@ -387,20 +403,14 @@ namespace jucePluginEditorLib
 
 		if(!m_processor.getConfig().getBoolValue("disclaimerSeen", false))
 		{
-			const juce::MessageBoxOptions options = juce::MessageBoxOptions::makeOptionsOk(juce::MessageBoxIconType::WarningIcon, m_processor.getProperties().name,
-	           "It is the sole responsibility of the user to operate this emulator within the bounds of all applicable laws.\n\n"
-
-				"Usage of emulators in conjunction with ROM images you are not legally entitled to own is forbidden by copyright law.\n\n"
-
-				"If you are not legally entitled to use this emulator please discontinue usage immediately.\n\n", 
-
-				"I Agree"
-			);
-
-			juce::NativeMessageBox::showAsync(options, [this](int)
+			const juce::WeakReference<Editor> safeThis(const_cast<Editor*>(this));
+			genericUI::showLegalDisclaimer(m_processor.getProperties().name, [safeThis]
 			{
-				m_processor.getConfig().setValue("disclaimerSeen", true);
-				onDisclaimerFinished();
+				if(auto* editor = safeThis.get())
+				{
+					editor->m_processor.getConfig().setValue("disclaimerSeen", true);
+					editor->onDisclaimerFinished();
+				}
 			});
 		}
 		else

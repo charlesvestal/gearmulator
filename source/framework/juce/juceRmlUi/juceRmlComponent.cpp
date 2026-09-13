@@ -4,7 +4,6 @@
 #include <algorithm> // std::transform
 
 #include "juceRmlComponentConfig.h"
-#include "juceRmlLookAndFeel.h"
 #include "rmlDataProvider.h"
 #include "rmlHelper.h"
 #include "rmlInterfaces.h"
@@ -32,6 +31,7 @@
 #include "RmlUi/Core/Context.h"
 #include "RmlUi/Core/Core.h"
 #include "RmlUi/Core/ElementDocument.h"
+#include "RmlUi/Core/Factory.h"
 #include "RmlUi/Debugger/Debugger.h"
 
 namespace juceRmlUi
@@ -67,12 +67,48 @@ namespace juceRmlUi
 			return false;
 		}
 
+		// the event a skin receives once per frame, the inline handler attribute that opts a
+		// document in, and the rate it is dispatched at if no refresh rate limit is configured
+		constexpr char g_frameEvent[] = "frame";
+		constexpr char g_frameEventHandler[] = "onframe";
+		constexpr float g_defaultFrameEventFPS = 60.0f;
+
 		static constexpr RendererProxy::RendererConfig g_renderConfigSoftware {true, false, false};
 		static constexpr RendererProxy::RendererConfig g_renderConfigGL2 {false, false, false};
 		static constexpr RendererProxy::RendererConfig g_renderConfigGL3 {true, true, true};
 #ifdef RMLUI_METAL_RENDERER
 		static constexpr RendererProxy::RendererConfig g_renderConfigMetal {true, true, true};
 #endif
+
+		// Map RmlUi cursor names (the strings used in RCSS `cursor:` and the
+		// few extra hints RmlUi emits internally) to JUCE cursors. Unknown
+		// names fall through to the default arrow.
+		juce::MouseCursor translateRmlCursor(const Rml::String& _name)
+		{
+			if (_name.empty() || _name == "arrow" || _name == "default" || _name == "auto")
+				return juce::MouseCursor::NormalCursor;
+			if (_name == "pointer" || _name == "hand")
+				return juce::MouseCursor::PointingHandCursor;
+			if (_name == "move")
+				return juce::MouseCursor::DraggingHandCursor;
+			if (_name == "text")
+				return juce::MouseCursor::IBeamCursor;
+			if (_name == "crosshair")
+				return juce::MouseCursor::CrosshairCursor;
+			if (_name == "wait")
+				return juce::MouseCursor::WaitCursor;
+			if (_name == "ew-resize" || _name == "col-resize" || _name == "resize-horizontal")
+				return juce::MouseCursor::LeftRightResizeCursor;
+			if (_name == "ns-resize" || _name == "row-resize" || _name == "resize-vertical")
+				return juce::MouseCursor::UpDownResizeCursor;
+			if (_name == "nesw-resize")
+				return juce::MouseCursor::TopRightCornerResizeCursor;
+			if (_name == "nwse-resize" || _name == "resize")
+				return juce::MouseCursor::TopLeftCornerResizeCursor;
+			// JUCE has no native "not-allowed" cursor (NoCursor is fully
+			// invisible, which would be confusing); fall back to default.
+			return juce::MouseCursor::NormalCursor;
+		}
 	}
 
 	RmlComponent::RmlComponent(RmlInterfaces& _interfaces, DataProvider& _dataProvider, std::string _rootRmlFilename, const float _contentScale/* = 1.0f*/, const ContextCreatedCallback& _contextCreatedCallback, const DocumentLoadFailedCallback& _docLoadFailedCallback, const RmlComponentConfig& _config)
@@ -100,6 +136,7 @@ namespace juceRmlUi
 			m_renderInterface.reset(new RendererJuce(m_coreInstance));
 			m_renderType = Renderer::Software;
 			m_renderProxy->setRenderer(m_renderInterface.get(), g_renderConfigSoftware);
+			onRendererChanged();
 		}
 		else
 		{
@@ -167,6 +204,15 @@ namespace juceRmlUi
 			throw;
 		}
 
+		// Hook RmlUi cursor changes (cursor: <name> in RCSS) into JUCE so the OS cursor actually
+		// updates over interactive elements. Installed only once construction can no longer fail:
+		// the SystemInterface outlives us, and a throw above means the destructor that drops this
+		// again never runs, leaving it holding a `this` that no longer exists.
+		m_rmlInterfaces.getSystemInterface().setCursorChangedCallback([this](const Rml::String& _name)
+		{
+			setMouseCursor(translateRmlCursor(_name));
+		});
+
 		m_drag.onDocumentLoaded();
 
 		m_updating = false;
@@ -175,17 +221,15 @@ namespace juceRmlUi
 
 	RmlComponent::~RmlComponent()
 	{
+		// Drop the cursor callback before any of our state goes away — the
+		// SystemInterface may outlive this component if it's shared.
+		m_rmlInterfaces.getSystemInterface().setCursorChangedCallback({});
+
 #ifdef RMLUI_METAL_RENDERER
 		if (m_metalContext)
 			m_metalContext->detach();
 #endif
 		m_renderProxy->setRenderer(nullptr, g_renderConfigSoftware);
-
-		if (m_lookAndFeelParent)
-			m_lookAndFeelParent->setLookAndFeel(nullptr);
-		m_lookAndFeelParent = nullptr;
-
-		delete m_lookAndFeel;
 
 		enableDebugger(false);
 
@@ -301,6 +345,7 @@ namespace juceRmlUi
 		m_openGLversion = version;
 
 		m_renderProxy->setRenderer(m_renderInterface.get(), m_renderType == Renderer::Gl3 ? g_renderConfigGL3 : g_renderConfigGL2);
+		onRendererChanged();
 
 		{
 			std::scoped_lock lock(m_timerMutex);
@@ -314,6 +359,11 @@ namespace juceRmlUi
 
 	void RmlComponent::renderOpenGL()
 	{
+		// Same lock, same order as update(): the render below walks the element tree, and the message
+		// thread changes that tree under the access lock only. Nothing may hold this lock while joining
+		// the GL thread, or the join waits for a frame that waits for the lock - see update().
+		RmlInterfaces::ScopedAccess access(*this);
+
 		{
 			// although we set that we render only manually, juce still calls this function eventhough we didn't
 			// request a repaint, for example when the window is resized.
@@ -435,6 +485,7 @@ namespace juceRmlUi
 		}
 
 		m_renderProxy->setRenderer(m_renderInterface.get(), g_renderConfigMetal);
+		onRendererChanged();
 
 		// Set a fake GL version to trigger the advancedrenderer theme activation in update()
 		m_openGLversion = g_advancedRendererMinimumGLversion;
@@ -461,6 +512,25 @@ namespace juceRmlUi
 		if (!m_renderProxy->hasRenderFunctions())
 			return;
 
+		// update() handed us a frame and waits for m_renderDone before it produces the next one, so
+		// every way out of here has to give it back - a frame that could not be drawn is dropped,
+		// not held on to, or the component never updates again.
+		const juce::ScopeGuard frameDone { [this] { m_renderDone = true; } };
+
+		// Not getRenderSize(): that walks the juce component tree - getLocalBounds(), and the parent
+		// chain that getOpenGLRenderingScale() follows - which the message thread rewrites in
+		// setBounds()/resized(), so a resize in flight hands the render thread a torn rectangle.
+		// updateDrawableSize() publishes the identical value from the message thread instead.
+		const Rml::Vector2i size { _context.getViewportWidth(), _context.getViewportHeight() };
+		if (size.x <= 0 || size.y <= 0) return;
+
+		// Wait for the drawable before taking the access lock. nextDrawable blocks - for up to a
+		// second at a time when the layer is not being presented, i.e. whenever the window is hidden
+		// or covered - and holding the lock across that starved the message thread, which needs it
+		// for every timer tick, until the UI stood still.
+		auto* drawable = _context.nextDrawable();
+		if (!drawable) return;
+
 		RmlInterfaces::ScopedAccess access(*this);
 
 		if (!m_rmlContext || !m_renderInterface)
@@ -468,11 +538,6 @@ namespace juceRmlUi
 
 		auto* metal = dynamic_cast<RenderInterface_Metal*>(m_renderInterface.get());
 		if (!metal) return;
-
-		const auto size = getRenderSize();
-		if (size.x <= 0 || size.y <= 0) return;
-		auto* drawable = _context.nextDrawable();
-		if (!drawable) return;
 
 		metal->SetViewport(size.x, size.y);
 		metal->BeginFrame(drawable);
@@ -494,8 +559,6 @@ namespace juceRmlUi
 		{
 			metal->EndFrame();
 		}
-
-		m_renderDone = true;
 	}
 
 	void RmlComponent::metalContextClosing(MetalContext&)
@@ -536,6 +599,25 @@ namespace juceRmlUi
 		Component::mouseUp(_event);
 		RmlInterfaces::ScopedAccess access(*this);
 		m_rmlContext->ProcessMouseButtonUp(static_cast<int>(helper::toRmlMouseButton(_event)), toRmlModifiers(_event));
+
+		if (!m_rmlContext->GetHoverElement())
+		{
+			// RmlUi delivers a mouse-up to the hovered element only. With the cursor outside the context - a press
+			// released off the window, or a focus loss that we turned into a mouse-leave - there is none, and
+			// document-level listeners never learn that the button went up. Hand the release to the documents.
+			const auto pos = toRmlPosition(_event);
+			const int modifiers = toRmlModifiers(_event);
+			Rml::Dictionary parameters;
+			parameters["mouse_x"] = pos.x;
+			parameters["mouse_y"] = pos.y;
+			parameters["button"] = static_cast<int>(helper::toRmlMouseButton(_event));
+			static constexpr const char* modifierNames[] = {"ctrl_key", "shift_key", "alt_key", "meta_key", "caps_lock_key", "num_lock_key", "scroll_lock_key"};
+			for (int i = 0; i < 7; ++i)
+				parameters[modifierNames[i]] = (modifiers & (1 << i)) ? 1 : 0;
+			for (int i = 0; i < m_rmlContext->GetNumDocuments(); ++i)
+				if (auto* document = m_rmlContext->GetDocument(i))
+					document->DispatchEvent(Rml::EventId::Mouseup, parameters);
+		}
 		enqueueUpdate();
 	}
 
@@ -585,15 +667,60 @@ namespace juceRmlUi
 		enqueueUpdate();
 	}
 
+	namespace
+	{
+		// RmlUi wants the wheel delta in NOTCHES: it scrolls UNIT_SCROLL_LENGTH
+		// (80dp) per unit, the same convention its SDL/GLFW backends use. JUCE
+		// instead reports a platform-scaled fraction, so passing its value
+		// through unchanged moved a notch by a couple of pixels on macOS and a
+		// trackpad flick by nothing at all.
+		//
+		// One detent, as the platform peers produce it:
+#if JUCE_MAC
+		constexpr float g_wheelDeltaPerNotch = 10.0f / 256.0f;
+#elif JUCE_WINDOWS
+		constexpr float g_wheelDeltaPerNotch = 60.0f / 256.0f;
+#else
+		constexpr float g_wheelDeltaPerNotch = 50.0f / 256.0f;
+#endif
+		// Pixel-precise (trackpad) deltas arrive divided by this, so multiplying
+		// it back gives the pixel count the OS computed - which already carries
+		// the system's own scroll acceleration.
+		constexpr float g_wheelDeltaPerPixel = 0.5f / 256.0f;
+
+		// RmlUi's UNIT_SCROLL_LENGTH. Dividing the pixel count by it turns a
+		// gesture into units, i.e. tracks the fingers roughly 1:1.
+		constexpr float g_rmlUnitScrollLength = 80.0f;
+
+		// A single event should never fling the view across the document; the
+		// OS emits many small ones instead.
+		constexpr float g_maxWheelUnitsPerEvent = 10.0f;
+
+		float toRmlWheelUnits(const float _delta, const bool _isSmooth)
+		{
+			if (_delta == 0.0f)
+				return 0.0f;
+
+			const auto units = _isSmooth
+				? _delta / g_wheelDeltaPerPixel / g_rmlUnitScrollLength
+				: _delta / g_wheelDeltaPerNotch;
+
+			return juce::jlimit(-g_maxWheelUnitsPerEvent, g_maxWheelUnitsPerEvent, units);
+		}
+	}
+
 	void RmlComponent::mouseWheelMove(const juce::MouseEvent& _event, const juce::MouseWheelDetails& _wheel)
 	{
 		Component::mouseWheelMove(_event, _wheel);
 
 		RmlInterfaces::ScopedAccess access(*this);
 
-		// wheel direction is right/down for positive values, in juce its the other way around, thats why we flip
-		const auto deltaX = -_wheel.deltaX;
-		const auto deltaY = -_wheel.deltaY;
+		// wheel direction is right/down for positive values, in juce its the other way around, thats why we flip.
+		// Note that _wheel.isReversed must NOT be applied on top: the platform
+		// deltas already have the system's natural-scrolling preference baked in,
+		// the flag only reports that they do. Inverting again would ignore it.
+		const auto deltaX = -toRmlWheelUnits(_wheel.deltaX, _wheel.isSmooth);
+		const auto deltaY = -toRmlWheelUnits(_wheel.deltaY, _wheel.isSmooth);
 
 		m_rmlContext->ProcessMouseWheel(Rml::Vector2f(deltaX, deltaY), toRmlModifiers(_event));
 		enqueueUpdate();
@@ -614,7 +741,11 @@ namespace juceRmlUi
 	{
 		RmlInterfaces::ScopedAccess access(*this);
 
-		m_pressedKeys.push_back(_key);
+		// Auto-repeat calls us again for a key that is still held. Recording it twice means two
+		// ProcessKeyUp for one physical release, and on a platform where the vector is only drained
+		// by a real key-up it grows for as long as the key is down.
+		if (std::find(m_pressedKeys.begin(), m_pressedKeys.end(), _key) == m_pressedKeys.end())
+			m_pressedKeys.push_back(_key);
 
 		bool res = false;
 
@@ -706,13 +837,27 @@ namespace juceRmlUi
 	{
 		Component::focusLost(_cause);
 
-		// We skip this on Linux because apparently focusLost is called when the mouse button is released?!
-		// https://tus.youtrack.cloud/tickets/BUG-10084/
+		{
+			RmlInterfaces::ScopedAccess access(*this);
+
+			if (m_rmlContext)
+			{
+				// We skip the mouse leave on Linux because apparently focusLost is called when the mouse button
+				// is released?! https://tus.youtrack.cloud/tickets/BUG-10084/
+				// The key release below is not part of that quirk and has to happen on every platform.
 #if JUCE_WINDOWS || JUCE_MAC
-		RmlInterfaces::ScopedAccess access(*this);
-		if (m_rmlContext)
-			m_rmlContext->ProcessMouseLeave();
+				m_rmlContext->ProcessMouseLeave();
 #endif
+				// Key-ups only reach the focused component, so a key held across a focus change never gets its
+				// release inferred in keyStateChanged() and stays down in RmlUi - and in every listener that mirrors
+				// the key state - until the next unrelated key-up. Release everything we still consider held.
+				std::vector<juce::KeyPress> released;
+				released.swap(m_pressedKeys);
+				for (const auto& key : released)
+					m_rmlContext->ProcessKeyUp(helper::toRmlKey(key), toRmlModifiers(key));
+			}
+			evFocusLost(this);
+		}
 
 		enqueueUpdate();
 	}
@@ -726,14 +871,6 @@ namespace juceRmlUi
 
 	void RmlComponent::parentHierarchyChanged()
 	{
-		auto* rootComponent = getTopLevelComponent();
-		if (!m_lookAndFeel)
-			m_lookAndFeel = new LookAndFeel();
-		if (m_lookAndFeelParent)
-			m_lookAndFeelParent->setLookAndFeel(nullptr);
-		m_lookAndFeelParent = rootComponent;
-		rootComponent->setLookAndFeel(m_lookAndFeel);
-
 #ifdef RMLUI_METAL_RENDERER
 		// Retry Metal attachment now that we have a parent hierarchy (and likely a native peer)
 		if (m_metalContext)
@@ -789,7 +926,13 @@ namespace juceRmlUi
 			return static_cast<float>(m_metalContext->getRenderingScale());
 #endif
 
-		float scale = 1.0f;
+		// The component transform chain only carries scaling this code applied
+		// itself. The platform's own DPI scaling never appears in it, so the
+		// factor observed while painting has to be folded back in here - without
+		// it the render target is sized in logical pixels while the image juce
+		// hands the software renderer is sized in physical ones, and the UI ends
+		// up drawn into a corner of the window.
+		float scale = m_softwareRenderScale.load(std::memory_order_relaxed);
 		const Component* t = this;
 		while (t)
 		{
@@ -872,6 +1015,7 @@ namespace juceRmlUi
 		{
 			m_renderInterface.reset(new RendererJuce(m_coreInstance));
 			m_renderProxy->setRenderer(m_renderInterface.get(), g_renderConfigSoftware);
+			onRendererChanged();
 		}
 		else if (!m_renderInterface)
 			return;
@@ -889,6 +1033,8 @@ namespace juceRmlUi
 
 		m_updating = true;
 		m_renderDone = false;
+
+		auto frameEventActive = false;
 
 		{
 			std::scoped_lock lock(m_contextRenderMutex);
@@ -908,6 +1054,11 @@ namespace juceRmlUi
 			}
 
 			evPreUpdate(this);
+
+			if (visible)
+				frameEventActive = dispatchFrameEvent();
+			else
+				m_lastFrameEventTime = 0.0;	// an editor that is not on screen animates nothing, do not report the gap as one frame
 
 			m_rmlContext->Update();
 
@@ -943,11 +1094,19 @@ namespace juceRmlUi
 			// immediate update
 			--m_pendingUpdates;
 		}
-		else
+		else if (!frameEventActive)
 		{
 			// render every 0.5 seconds if there is no update pending
 			m_rmlContext->RequestNextUpdate(0.5f);
 			m_nextFrameTime = std::max(m_nextFrameTime, t + m_rmlContext->GetNextUpdateDelay());
+		}
+		else if (m_targetFPS <= 0)
+		{
+			// A skin is animating, so the idle tick above is skipped to keep the loop running. Without a
+			// configured refresh rate limit nothing else paces it and the animation would run as fast as
+			// the message loop allows, so cap it here. A configured limit takes precedence and is already
+			// applied above.
+			m_nextFrameTime = std::max(m_nextFrameTime, t + 1.0f / g_defaultFrameEventFPS);
 		}
 
 		// ensure that new post frame callbacks that are added by other post frame callbacks are executed in the next frame
@@ -967,11 +1126,21 @@ namespace juceRmlUi
 		}
 		else if (m_renderType == Renderer::Software)
 		{
-			// get rid of opengl context if we switched to software rendering
+			// The GL context turned out to be a software rasterizer (newOpenGLContextCreated), so we
+			// draw with our own software renderer and drop it. Detaching joins the GL thread, whose
+			// renderOpenGL() takes the access lock we hold right now, so it has to wait until the
+			// lock is gone. Rendering stays blocked (m_renderDone) until then; the detach restarts it.
 			if (m_openGLContext)
 			{
-				m_openGLContext->detach();
-				m_openGLContext.reset();
+				juce::MessageManager::callAsync([safe = juce::Component::SafePointer<RmlComponent>(this)]
+				{
+					if (!safe || !safe->m_openGLContext)
+						return;
+					safe->m_openGLContext->detach();
+					safe->m_openGLContext.reset();
+					safe->m_renderDone = true;
+					safe->enqueueUpdate();
+				});
 				return;
 			}
 
@@ -981,12 +1150,28 @@ namespace juceRmlUi
 			m_openGLContext->triggerRepaint();
 #ifdef RMLUI_METAL_RENDERER
 		else if (m_metalContext)
+		{
+			// The layer geometry comes from AppKit objects, which only the message thread may read.
+			m_metalContext->updateDrawableSize();
 			m_metalContext->triggerRepaint();
+		}
 #endif
 
 		std::scoped_lock lock(m_timerMutex);
 		// we make the timer run a bit faster to prevent that we miss the next frame time by a too large margin
 		startNextFrameTimer();
+	}
+
+	void RmlComponent::onRendererChanged() const
+	{
+		if (!m_rmlContext)
+			return;
+
+		// Dropping the textures makes RmlUi regenerate them through a proper render pass, which
+		// is the only way a box shadow - a CallbackTexture built with SaveLayerAsTexture - can
+		// come back correctly. Without this it keeps the handle it already has, that handle no
+		// longer resolves on the new renderer, and the element silently draws nothing forever.
+		Rml::ReleaseTextures(m_coreInstance);
 	}
 
 	void RmlComponent::enqueueUpdate()
@@ -1070,26 +1255,32 @@ namespace juceRmlUi
 		if (!r)
 			return;
 
-		auto* rootComp = getTopLevelComponent();
-		auto* laf = dynamic_cast<LookAndFeel*>(&rootComp->getLookAndFeel());
-
-		const auto& img = laf ? laf->getCurrentImage() : juce::Image();
-
-		// If the clip origin is offset (window partially off-screen), we cannot render
-		// directly to the LookAndFeel image as it ignores the clip offset. Fall back to
-		// the slower Graphics path which respects the JUCE transform/clip pipeline.
-		const auto clipOrigin = _g.getClipBounds().getPosition();
-		const bool useDirectPath = img.isValid() && clipOrigin.isOrigin();
-
+		// Always hand the frame to juce through _g. An earlier shortcut wrote it straight into the
+		// bitmap the window peer paints into, at that bitmap's origin - which is the window's
+		// top-left corner, not this component's, so in a standalone the panel landed on top of
+		// the title bar and lost its bottom rows.
 		const auto size = getRenderSize();
 
 		r->beginFrame(_g, size);
 
 		m_renderProxy->executeRenderFunctions();
 
-		r->endFrame(useDirectPath ? img : juce::Image(), getOpenGLRenderingScale());
+		r->endFrame(getOpenGLRenderingScale());
 
 		m_renderDone = true;
+
+		// This is the only place the device-pixel scale is observable without a
+		// GL or Metal context: juce composes the platform DPI scale into the
+		// graphics context it paints with. Adopt it *after* the frame, so the
+		// render target size and the scale endFrame was given stay consistent,
+		// and let the next update() resize the RmlUi context to match.
+		const auto physicalScale = _g.getInternalContext().getPhysicalPixelScaleFactor();
+
+		if (physicalScale > 0.0f && physicalScale != m_softwareRenderScale.load(std::memory_order_relaxed))
+		{
+			m_softwareRenderScale.store(physicalScale, std::memory_order_relaxed);
+			enqueueUpdate();
+		}
 	}
 
 	juce::Component* RmlComponent::getComponentAt(const juce::Point<float> _position)
@@ -1144,9 +1335,12 @@ namespace juceRmlUi
 					rmlString.insert(pos + key.length(), templates);
 				};
 
-				addTemplate("tus_patchmanager.rml");
-				addTemplate("tus_colorpicker.rml");
-				addTemplate("tus_settings.rml");
+				if (m_config.includeDefaultTemplates)
+				{
+					addTemplate("tus_patchmanager.rml");
+					addTemplate("tus_colorpicker.rml");
+					addTemplate("tus_settings.rml");
+				}
 
 				for (const auto& templateName : m_config.additionalTemplateFiles)
 					addTemplate(templateName);
@@ -1205,6 +1399,10 @@ namespace juceRmlUi
 		Rml::RemoveContext(m_coreInstance, m_rmlContext->GetName());
 		m_rmlContext = nullptr;
 
+		// Cached stylesheets share spritesheet TextureSources, whose texture views are keyed by
+		// RenderManager address. Drop them before releasing the manager: a later component can
+		// reuse that address and otherwise inherit indices into the old texture database.
+		m_coreInstance.factory->ClearStyleSheetCache();
 		Rml::ReleaseRenderManagers(m_coreInstance);
 	}
 
@@ -1225,6 +1423,51 @@ namespace juceRmlUi
 			m_rmlContext->SetDensityIndependentPixelRatio(renderScale * m_contentScale);
 			m_rmlContext->SetDimensions({ size.x, size.y });
 		}
+	}
+
+	// A skin that needs to animate on its own clock - an oscilloscope, a VU meter, anything that
+	// has to move without a parameter changing - declares an onframe handler on its body and gets
+	// a 'frame' event once per rendered frame, carrying the elapsed time and the time since the
+	// previous frame. A skin that does not declare one pays nothing but an attribute lookup, and
+	// because this rides the normal update tick it is throttled by the frame rate limit and stops
+	// entirely while the editor is off screen. Returns whether anything listened - while something
+	// does, the caller has to keep the update loop at the frame rate instead of dropping to the
+	// idle tick, or the skin would be animating at two frames per second.
+	bool RmlComponent::dispatchFrameEvent()
+	{
+		const auto numDocuments = m_rmlContext->GetNumDocuments();
+
+		Rml::Dictionary parameters;
+		auto haveParameters = false;
+
+		for (int i=0; i<numDocuments; ++i)
+		{
+			auto* document = m_rmlContext->GetDocument(i);
+
+			if (!document || !document->HasAttribute(g_frameEventHandler))
+				continue;
+
+			if (!haveParameters)
+			{
+				const auto time = m_rmlInterfaces.getSystemInterface().GetElapsedTime();
+
+				// nothing listened on the previous frame, so there is no interval to report yet
+				const auto delta = m_lastFrameEventTime > 0.0 ? time - m_lastFrameEventTime : 0.0;
+
+				parameters["time"] = time;
+				parameters["delta"] = delta;
+
+				m_lastFrameEventTime = time;
+				haveParameters = true;
+			}
+
+			document->DispatchEvent(g_frameEvent, parameters, false, false);
+		}
+
+		if (!haveParameters)
+			m_lastFrameEventTime = 0.0;
+
+		return haveParameters;
 	}
 
 	void RmlComponent::startNextFrameTimer()

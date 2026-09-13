@@ -76,6 +76,21 @@ namespace synthLib
 		M_POLYMODEON		= 0x7f
 	};
 
+	// Universal tuning messages emitted by some hosts even for instruments that
+	// do not implement MIDI Tuning Standard. Keep this deliberately narrow: the
+	// caller decides whether to reject them, while other universal SysEx (for
+	// example identity traffic) remains untouched.
+	inline bool isUniversalTuningSysex(const SysexBuffer& _sysex)
+	{
+		if (_sysex.size() < 6 || _sysex.front() != M_STARTOFSYSEX || _sysex.back() != M_ENDOFSYSEX)
+			return false;
+
+		const bool midiTuningBulkDump = _sysex[1] == 0x7e && _sysex[3] == 0x08 && _sysex[4] == 0x01;
+		const bool masterFineTuning = _sysex.size() == 8 && _sysex[1] == 0x7f &&
+			_sysex[3] == 0x04 && _sysex[4] == 0x03;
+		return midiTuningBulkDump || masterFineTuning;
+	}
+
 	// control changes
 
 	enum
@@ -241,24 +256,46 @@ namespace synthLib
 		Count
 	};
 
+	enum class MidiEventType : uint8_t
+	{
+		Midi,
+		TransportDiscontinuity
+	};
+
+	enum class TransportDiscontinuity : uint8_t
+	{
+		None,
+		Start,
+		Stop,
+		Seek
+	};
+
 	struct SMidiEvent
 	{
 		uint8_t a, b, c;
 		SysexBuffer sysex;
 		uint32_t offset;
 		MidiEventSource source;
-
+		MidiEventType type = MidiEventType::Midi;
+		uint32_t transportGeneration = 0;
+		// Physical / virtual MIDI port the event belongs to (devices with several
+		// MIDI inputs or outputs, e.g. the SC-88 family's IN A/B and USB cables).
+		uint8_t port = 0;
 		SMidiEvent(const MidiEventSource _source = MidiEventSource::Unknown, const uint8_t _a = 0, const uint8_t _b = 0, const uint8_t _c = 0, const uint32_t _offset = 0)
 			: a(_a), b(_b), c(_c), offset(_offset), source(_source)
 		{
 		}
 
-		SMidiEvent(const SMidiEvent& _e) : a(_e.a), b(_e.b), c(_e.c), sysex(_e.sysex), offset(_e.offset), source(_e.source)
+		SMidiEvent(const SMidiEvent& _e)
+			: a(_e.a), b(_e.b), c(_e.c), sysex(_e.sysex), offset(_e.offset), source(_e.source), type(_e.type)
+			, transportGeneration(_e.transportGeneration), port(_e.port)
 		{
 			assert(empty() || source != MidiEventSource::Unknown);
 		}
 
-		SMidiEvent(SMidiEvent&& _e) noexcept : a(_e.a), b(_e.b), c(_e.c), sysex(std::move(_e.sysex)), offset(_e.offset), source(_e.source)
+		SMidiEvent(SMidiEvent&& _e) noexcept
+			: a(_e.a), b(_e.b), c(_e.c), sysex(std::move(_e.sysex)), offset(_e.offset), source(_e.source), type(_e.type)
+			, transportGeneration(_e.transportGeneration), port(_e.port)
 		{
 			assert(empty() || source != MidiEventSource::Unknown);
 		}
@@ -273,6 +310,9 @@ namespace synthLib
 			sysex = _e.sysex;
 			offset = _e.offset;
 			source = _e.source;
+			type = _e.type;
+			transportGeneration = _e.transportGeneration;
+			port = _e.port;
 			assert(empty() || source != MidiEventSource::Unknown);
 			return *this;
 		}
@@ -285,13 +325,43 @@ namespace synthLib
 			sysex = std::move(_e.sysex);
 			offset = _e.offset;
 			source = _e.source;
+			type = _e.type;
+			transportGeneration = _e.transportGeneration;
+			port = _e.port;
 			assert(empty() || source != MidiEventSource::Unknown);
 			return *this;
 		}
 
 		bool empty() const
 		{
-			return a == 0 && sysex.empty();
+			return type == MidiEventType::Midi && a == 0 && sysex.empty();
 		}
 	};
+
+	// Whether this event's delivery is tied to the host transport: it belongs to a generation, is
+	// discarded when the transport jumps, and is replaced by the All Sound Off that follows. SysEx
+	// never is - a dump has to arrive whole no matter what the transport does - and neither is
+	// anything a device produced itself.
+	//
+	// The write side (Plugin::stampTransportGeneration) and the read side
+	// (MidiRateLimiter::transportDiscontinuity) must agree on this exactly, which is why it lives
+	// here rather than in either of them. Disagreeing either way is silent: an event that is
+	// stamped but not purged survives a seek forever, and one that is purged but never stamped
+	// keeps generation 0 and is dropped on every discontinuity there is.
+	inline bool isTransportBound(const SMidiEvent& _event)
+	{
+		return _event.sysex.empty() &&
+			(_event.source == MidiEventSource::Host || _event.source == MidiEventSource::Internal);
+	}
+
+	// Copies a message of one to three bytes - anything but SysEx - into a, b and c. The data bytes
+	// a message does not have are zeroed, not read: a MIDI API's buffer may hold anything past the
+	// end of the message, and a program change must not pick up a third byte from it.
+	inline void setShortMessage(SMidiEvent& _event, const uint8_t* _data, const size_t _size)
+	{
+		assert(_size >= 1 && _size <= 3);
+		_event.a = _data[0];
+		_event.b = _size > 1 ? _data[1] : 0;
+		_event.c = _size > 2 ? _data[2] : 0;
+	}
 }
