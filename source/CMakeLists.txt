@@ -124,22 +124,28 @@ endif()
 if(${CMAKE_PROJECT_NAME}_SYNTH_VAVRA)
 	add_subdirectory(waldi/microq/mqLib EXCLUDE_FROM_ALL)
 
-	# needed for test console
-	set(CPPTERMINAL_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
-	set(CPPTERMINAL_ENABLE_INSTALL OFF CACHE BOOL "" FORCE)
-	set(CPPTERMINAL_ENABLE_TESING OFF CACHE BOOL "" FORCE)
-	add_subdirectory(3rdparty/cpp-terminal EXCLUDE_FROM_ALL)
+	# The interactive test consoles are desktop-only: they want a terminal, a MIDI
+	# port and a portaudio host API. iOS has none of the three -- portaudio does not
+	# even CONFIGURE there, its FIND_LIBRARY for the host API fails hard, which took
+	# the whole tree down with it whenever Vavra was enabled for an iOS build.
+	if(NOT IOS)
+		# needed for test console
+		set(CPPTERMINAL_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+		set(CPPTERMINAL_ENABLE_INSTALL OFF CACHE BOOL "" FORCE)
+		set(CPPTERMINAL_ENABLE_TESING OFF CACHE BOOL "" FORCE)
+		add_subdirectory(3rdparty/cpp-terminal EXCLUDE_FROM_ALL)
 
-	if(NOT ANDROID)
-		add_subdirectory(3rdparty/portmidi EXCLUDE_FROM_ALL)
+		if(NOT ANDROID)
+			add_subdirectory(3rdparty/portmidi EXCLUDE_FROM_ALL)
+		endif()
+
+		set(PA_USE_ASIO OFF CACHE BOOL "" FORCE)
+		add_subdirectory(3rdparty/portaudio EXCLUDE_FROM_ALL)
+
+		add_subdirectory(waldi/microq/mqConsoleLib EXCLUDE_FROM_ALL)
+		add_subdirectory(waldi/microq/mqTestConsole)
+		add_subdirectory(waldi/microq/mqPerformanceTest)
 	endif()
-
-	set(PA_USE_ASIO OFF CACHE BOOL "" FORCE)
-	add_subdirectory(3rdparty/portaudio EXCLUDE_FROM_ALL)
-
-	add_subdirectory(waldi/microq/mqConsoleLib EXCLUDE_FROM_ALL)
-	add_subdirectory(waldi/microq/mqTestConsole)
-	add_subdirectory(waldi/microq/mqPerformanceTest)
 
 	if(${CMAKE_PROJECT_NAME}_BUILD_JUCEPLUGIN)
 		add_subdirectory(waldi/microq/mqJucePlugin)
@@ -150,7 +156,9 @@ endif()
 
 if(${CMAKE_PROJECT_NAME}_SYNTH_XENIA)
 	add_subdirectory(waldi/xt/xtLib EXCLUDE_FROM_ALL)
-	add_subdirectory(waldi/xt/xtTestConsole)
+	if(NOT IOS)
+		add_subdirectory(waldi/xt/xtTestConsole)	# console tool, see the Vavra note above
+	endif()
 
 	if(${CMAKE_PROJECT_NAME}_BUILD_JUCEPLUGIN)
 		add_subdirectory(waldi/xt/xtJucePlugin)
