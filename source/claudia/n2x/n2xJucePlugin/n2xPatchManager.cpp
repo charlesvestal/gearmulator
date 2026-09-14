@@ -8,6 +8,15 @@
 
 #include "n2xLib/n2xmiditypes.h"
 
+#include "dsp56kBase/logging.h"
+
+#include "synthLib/midiToSysex.h"
+#include "synthLib/romLoader.h"
+#include "baseLib/filesystem.h"
+
+#include <algorithm>
+#include <set>
+
 namespace n2xJucePlugin
 {
 	constexpr char g_performancePrefixes[] = {'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'J', 'L' };
@@ -15,6 +24,9 @@ namespace n2xJucePlugin
 	static constexpr std::initializer_list<jucePluginEditorLib::patchManager::GroupType> g_groupTypes =
 	{
 		jucePluginEditorLib::patchManager::GroupType::Favourites,
+		// Rom datasources map to Factory (patchmanager/types.cpp); without the
+		// group here they would load and have nowhere to be shown.
+		jucePluginEditorLib::patchManager::GroupType::Factory,
 		jucePluginEditorLib::patchManager::GroupType::MidiBanks,
 		jucePluginEditorLib::patchManager::GroupType::LocalStorage,
 		jucePluginEditorLib::patchManager::GroupType::DataSources,
@@ -28,6 +40,20 @@ namespace n2xJucePlugin
 		setTagTypeName(pluginLib::patchDB::TagType::CustomA, "Patch Type");
 		startLoaderThread();
 		addGroupTreeItemForTag(pluginLib::patchDB::TagType::CustomA);
+
+		// _save is false: this is derived from files on disk, so persisting it
+		// would leave the DB carrying a stale copy once a file changes or goes away.
+		const auto& banks = factoryBanks();
+
+		for (uint32_t i = 0; i < static_cast<uint32_t>(banks.size()); ++i)
+		{
+			pluginLib::patchDB::DataSource ds;
+			ds.type = pluginLib::patchDB::SourceType::Rom;
+			ds.origin = pluginLib::patchDB::DataSourceOrigin::Manual;
+			ds.bank = i;
+			ds.name = banks[i].name;
+			addDataSource(ds, false);
+		}
 	}
 
 	PatchManager::~PatchManager()
@@ -44,9 +70,82 @@ namespace n2xJucePlugin
 		return !_data.empty();
 	}
 
-	bool PatchManager::loadRomData(pluginLib::patchDB::DataList& _results, uint32_t _bank, uint32_t _program)
+	const std::vector<PatchManager::FactoryBank>& PatchManager::factoryBanks()
 	{
-		return false;
+		if(m_factoryBanksScanned)
+			return m_factoryBanks;
+		m_factoryBanksScanned = true;
+
+		// Identified by content, not by name. The firmware ROM is a .bin, so it is
+		// never a candidate here; the size window spans a program bank (~24 KB) and
+		// a performance bank (~72 KB) in either container.
+		std::vector<std::string> files;
+
+		for (const auto& ext : {".syx", ".mid"})
+		{
+			auto found = synthLib::RomLoader::findFiles(ext, 8 * 1024, 256 * 1024);
+			files.insert(files.end(), found.begin(), found.end());
+		}
+
+		std::sort(files.begin(), files.end());
+
+		for (const auto& file : files)
+		{
+			std::vector<uint8_t> data;
+			if(!baseLib::filesystem::readFile(data, file) || data.empty())
+				continue;
+
+			// The flag is _isMidiFileData, and it is NOT cosmetic: a .mid wraps each
+			// message in a varlen length, a .syx is the raw stream. Passing true for
+			// a .syx sends it down the MIDI-file branch, which reads a length that
+			// is not there and finds nothing -- silently, since an empty scan is
+			// indistinguishable from "no bank files present".
+			// hasExtension() lowercases both sides; getExtension() does not, so a
+			// .SYX would otherwise be taken for a MIDI file.
+			const auto isMidiFile = !baseLib::filesystem::hasExtension(file, ".syx");
+
+			std::vector<std::vector<uint8_t>> messages;
+			synthLib::MidiToSysex::splitMultipleSysex(messages, data, isMidiFile);
+
+			FactoryBank bank;
+
+			for (auto& m : messages)
+			{
+				// isValidPatchDump() checks the dump SIZE first, so Clavia's ten
+				// trailing 1063-byte blocks (four singles' worth of data under a
+				// single-dump type, at programs 99..108) are rejected here, as are
+				// the out-of-range program numbers they carry.
+				if(isValidPatchDump(m))
+					bank.patches.emplace_back(std::move(m));
+			}
+
+			if(bank.patches.empty())
+			{
+				LOG("Factory bank: no valid dumps in " << file << " (" << messages.size() << " sysex messages)");
+				continue;
+			}
+
+			bank.name = baseLib::filesystem::stripExtension(baseLib::filesystem::getFilenameWithoutPath(file));
+
+			LOG("Factory bank '" << bank.name << "': " << bank.patches.size() << " dumps from " << file);
+			m_factoryBanks.emplace_back(std::move(bank));
+		}
+
+		return m_factoryBanks;
+	}
+
+	bool PatchManager::loadRomData(pluginLib::patchDB::DataList& _results, const uint32_t _bank, uint32_t /*_program*/)
+	{
+		// The whole bank is asked for at once (db.cpp passes g_invalidProgram).
+		const auto& banks = factoryBanks();
+
+		if(_bank >= banks.size())
+			return false;
+
+		for (const auto& p : banks[_bank].patches)
+			_results.push_back(p);
+
+		return !_results.empty();
 	}
 
 	pluginLib::patchDB::PatchPtr PatchManager::initializePatch(pluginLib::patchDB::Data&& _sysex, const std::string& _defaultPatchName)

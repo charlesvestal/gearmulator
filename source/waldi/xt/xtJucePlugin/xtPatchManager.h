@@ -4,6 +4,9 @@
 
 #include "jucePluginEditorLib/patchmanager/patchmanager.h"
 
+#include <string>
+#include <vector>
+
 namespace xtJucePlugin
 {
 	class Editor;
@@ -37,6 +40,25 @@ namespace xtJucePlugin
 		static constexpr uint64_t g_userDataArrangement = 1;
 
 	private:
+		/* The Microwave II/XT exposes no ROM patches of its own: its patch memory
+		 * is flash, uninitialized under emulation. So "Factory" here means sound
+		 * banks shipped alongside the ROM, split into their single dumps.
+		 *
+		 * Waldorf's own factory bank is distributed as a RAW 64 KB image with no
+		 * sysex in it at all, so it has to be wrapped into Single dumps first --
+		 * scripts/mw2_bank_to_sysex.py does that and writes the .syx this finds.
+		 * One entry per (file, bank), so the hardware's two banks of 128 stay
+		 * apart instead of merging into one list of 256. */
+		struct FactoryBank
+		{
+			std::string name;
+			std::vector<pluginLib::patchDB::Data> patches;
+		};
+
+		const std::vector<FactoryBank>& factoryBanks();
+		std::vector<FactoryBank> m_factoryBanks;
+		bool m_factoryBanksScanned = false;
+
 		static std::string extractMultiName(const pluginLib::patchDB::Data& _sysex);
 		bool activateSingle(const pluginLib::patchDB::PatchPtr& _patch, uint32_t _part);
 		bool activateMulti(const pluginLib::patchDB::Data& _multi);
