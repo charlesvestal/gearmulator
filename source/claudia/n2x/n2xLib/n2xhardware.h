@@ -78,6 +78,68 @@ namespace n2x
 		std::mutex m_requestedFramesAvailableMutex;
 		dsp56k::ConditionVariable m_requestedFramesAvailableCv;
 		size_t m_requestedFrames = 0;
+
+/* Audio-path instrumentation. OFF by default: it does iostream and a fopen/
+ * fprintf on the AUDIO THREAD once every 2s, which is fine for measuring and not
+ * for shipping. Build with -DN2X_AUDIO_TRACE=1 to turn it back on.
+ *
+ * This is what found the realtime-window bug (see threadtools.cpp): the ESAI
+ * output ring is pinned at its full cushion when healthy and drains to almost
+ * nothing when the DSP workers lose CPU, which is visible here long before it is
+ * audible. Worth keeping. */
+#ifndef N2X_AUDIO_TRACE
+#define N2X_AUDIO_TRACE 0
+#endif
+
+		/* Instrumentation for the producer/consumer handshake in processAudio().
+		 * The audio callback consumes in 64-frame chunks and BLOCKS on the CV per
+		 * chunk until the DSP threads have produced, so at 98.2 kHz internal a
+		 * 512-frame host buffer means eight waits per callback. If the DSP workers
+		 * are being scheduled late, it shows up here as wall time the host's render
+		 * thread spent blocked -- which is the difference between "the emulation is
+		 * too slow" and "the emulation is fast but not scheduled in time".
+		 *
+		 * The clock is only read on the path that actually blocks, so the common
+		 * case costs a branch. Totals are dumped every kStatsIntervalFrames of
+		 * output and then reset. */
+#if N2X_AUDIO_TRACE
+		struct AudioWaitStats
+		{
+			uint64_t callbacks = 0;
+			uint64_t chunks = 0;
+			uint64_t chunksBlocked = 0;
+			uint64_t framesSinceReport = 0;
+			double waitUsecTotal = 0.0;
+			double waitUsecMax = 0.0;
+			/* The DSPs produce at exactly real time, so a consumer asking for
+			 * frames that do not exist yet MUST wait roughly the time it takes to
+			 * make them: shortfall / g_samplerate. That inherent cost and a late
+			 * worker thread both look like "callback blocked", so measure the
+			 * EXPECTED wait beside the actual one -- the excess is the part that
+			 * scheduling has to answer for. */
+			/* Depth of the ESAI output ring at callback ENTRY. This is the cushion
+			 * that actually exists, as opposed to the one the extra-latency setting
+			 * asks for. At a 256-frame host buffer the configured cushion is ~5.3 ms
+			 * (~520 device frames); if this sits near zero instead, the latency never
+			 * materialises as standing audio and the consumer rides the production
+			 * edge -- which is what the 80%-of-callback wait figures imply. */
+			uint64_t ringDepthSum = 0;
+			uint32_t ringDepthMin = 0xffffffff;
+			uint32_t ringDepthMax = 0;
+			uint32_t latencyFrames = 0;
+
+			double waitExpectedUsecTotal = 0.0;
+			double waitExcessUsecTotal = 0.0;
+			double waitExcessUsecMax = 0.0;
+			double busyUsecTotal = 0.0;	// wall time in processAudio, waiting included
+			uint32_t hostBlockMin = 0xffffffff;
+			uint32_t hostBlockMax = 0;
+		};
+
+		AudioWaitStats m_waitStats;
+
+		void reportAudioWaitStats(uint32_t _hostBlockFrames, double _busyUsec);
+#endif
 		bool m_dspHalted = false;
 		dsp56k::SpscSemaphore m_semDspAtoB;
 

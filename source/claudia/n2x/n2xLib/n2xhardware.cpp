@@ -1,5 +1,11 @@
 #include "n2xhardware.h"
 
+#include <chrono>
+#include <unistd.h>
+#include <cstdlib>
+#include <cstdio>
+#include <sstream>
+
 #include "n2xromloader.h"
 #include "dsp56kBase/threadtools.h"
 #include "synthLib/deviceException.h"
@@ -94,6 +100,13 @@ namespace n2x
 
 	void Hardware::processAudio(uint32_t _frames, const uint32_t _latency)
 	{
+#if N2X_AUDIO_TRACE
+		using TraceClock = std::chrono::steady_clock;
+
+		const auto traceCallbackBegin = TraceClock::now();
+		const auto traceFrames = _frames;
+#endif
+
 		getMidi().process(_frames);
 
 		ensureBufferSize(_frames);
@@ -114,6 +127,17 @@ namespace n2x
 
 		auto& esaiB = m_dspB.getPeriph().getEsai();
 
+#if N2X_AUDIO_TRACE
+		{
+			// sample the cushion BEFORE consuming anything from it
+			const auto depth = static_cast<uint32_t>(esaiB.getAudioOutputs().size());
+			m_waitStats.ringDepthSum += depth;
+			m_waitStats.ringDepthMin = std::min(m_waitStats.ringDepthMin, depth);
+			m_waitStats.ringDepthMax = std::max(m_waitStats.ringDepthMax, depth);
+			m_waitStats.latencyFrames = _latency;
+		}
+#endif
+
 //		LOG("B out " << esaiB.getAudioOutputs().size() << ", A out " << esaiA.getAudioOutputs().size() << ", B in " << esaiB.getAudioInputs().size());
 
 		while (_frames)
@@ -125,9 +149,23 @@ namespace n2x
 
 			const auto requiredSize = processCount > 8 ? processCount - 8 : 0;
 
+#if N2X_AUDIO_TRACE
+			++m_waitStats.chunks;
+#endif
+
 			if(esaiB.getAudioOutputs().size() < requiredSize)
 			{
 				// reduce thread contention by waiting for output buffer to be full enough to let us grab the data without entering the read mutex too often
+
+#if N2X_AUDIO_TRACE
+				// clock read is on the blocking path only; the fast path pays a branch
+				const auto traceWaitBegin = TraceClock::now();
+
+				// how many frames were actually missing when we decided to wait
+				const auto available = esaiB.getAudioOutputs().size();
+				const auto shortfall = requiredSize > available ? requiredSize - available : 0;
+				const auto expectedUsec = static_cast<double>(shortfall) * 1'000'000.0 / static_cast<double>(g_samplerate);
+#endif
 
 				std::unique_lock uLock(m_requestedFramesAvailableMutex);
 				m_requestedFrames = requiredSize;
@@ -138,6 +176,19 @@ namespace n2x
 					m_requestedFrames = 0;
 					return true;
 				});
+
+#if N2X_AUDIO_TRACE
+				const auto waitUsec = std::chrono::duration<double, std::micro>(TraceClock::now() - traceWaitBegin).count();
+
+				const auto excessUsec = waitUsec - expectedUsec;
+
+				++m_waitStats.chunksBlocked;
+				m_waitStats.waitUsecTotal += waitUsec;
+				m_waitStats.waitUsecMax = std::max(m_waitStats.waitUsecMax, waitUsec);
+				m_waitStats.waitExpectedUsecTotal += expectedUsec;
+				m_waitStats.waitExcessUsecTotal += excessUsec;
+				m_waitStats.waitExcessUsecMax = std::max(m_waitStats.waitExcessUsecMax, excessUsec);
+#endif
 			}
 
 			// read output of DSP B to regular audio output
@@ -148,7 +199,88 @@ namespace n2x
 			outputs[2] += processCount;
 			outputs[3] += processCount;
 		}
+
+#if N2X_AUDIO_TRACE
+		reportAudioWaitStats(traceFrames, std::chrono::duration<double, std::micro>(TraceClock::now() - traceCallbackBegin).count());
+#endif
 	}
+
+#if N2X_AUDIO_TRACE
+	void Hardware::reportAudioWaitStats(const uint32_t _hostBlockFrames, const double _busyUsec)
+	{
+		auto& s = m_waitStats;
+
+		++s.callbacks;
+		s.busyUsecTotal += _busyUsec;
+		s.framesSinceReport += _hostBlockFrames;
+		s.hostBlockMin = std::min(s.hostBlockMin, _hostBlockFrames);
+		s.hostBlockMax = std::max(s.hostBlockMax, _hostBlockFrames);
+
+		// ~2 s of output between reports, so the log stays readable while playing
+		constexpr uint64_t kStatsIntervalFrames = 2 * g_samplerate;
+
+		if(s.framesSinceReport < kStatsIntervalFrames)
+			return;
+
+		// Budget is the wall time the host block is WORTH. Anything at or above
+		// 100% is an overrun: the callback took longer than the audio it returned.
+		const auto audioUsec = static_cast<double>(s.framesSinceReport) * 1'000'000.0 / static_cast<double>(g_samplerate);
+		const auto loadPercent = 100.0 * s.busyUsecTotal / audioUsec;
+		const auto waitPercent = s.busyUsecTotal > 0.0 ? 100.0 * s.waitUsecTotal / s.busyUsecTotal : 0.0;
+		const auto blockedPercent = s.chunks ? 100.0 * static_cast<double>(s.chunksBlocked) / static_cast<double>(s.chunks) : 0.0;
+		const auto waitAvgUsec = s.chunksBlocked ? s.waitUsecTotal / static_cast<double>(s.chunksBlocked) : 0.0;
+		const auto expAvgUsec = s.chunksBlocked ? s.waitExpectedUsecTotal / static_cast<double>(s.chunksBlocked) : 0.0;
+		const auto excessAvgUsec = s.chunksBlocked ? s.waitExcessUsecTotal / static_cast<double>(s.chunksBlocked) : 0.0;
+
+		std::stringstream line;
+		line << "audio: blocks=" << s.hostBlockMin << ".." << s.hostBlockMax
+			<< " callbacks=" << s.callbacks
+			<< " load=" << static_cast<int>(loadPercent + 0.5) << "%"
+			<< " | chunks=" << s.chunks
+			<< " blocked=" << s.chunksBlocked
+			<< " (" << static_cast<int>(blockedPercent + 0.5) << "%)"
+			<< " | wait avg=" << static_cast<int>(waitAvgUsec + 0.5) << "us"
+			<< " max=" << static_cast<int>(s.waitUsecMax) << "us"
+			<< " =" << static_cast<int>(waitPercent + 0.5) << "% of callback time"
+			<< " | EXPECTED avg=" << static_cast<int>(expAvgUsec + 0.5) << "us"
+			<< " EXCESS avg=" << static_cast<int>(excessAvgUsec) << "us"
+			<< " max=" << static_cast<int>(s.waitExcessUsecMax) << "us"
+			<< " | ring=" << s.ringDepthMin << ".." << s.ringDepthMax
+			<< " avg=" << (s.callbacks ? static_cast<uint32_t>(s.ringDepthSum / s.callbacks) : 0)
+			<< " (latency=" << s.latencyFrames << ")"
+			<< " | dspA=" << m_dspA.getDSPThread().getCurrentMips()
+			<< " dspB=" << m_dspB.getDSPThread().getCurrentMips() << " MIPS";
+
+		LOG(line.str());
+
+		/* An AUv3 runs as its OWN extension process on iOS, so its stdout never
+		 * reaches a --console launch of the host. Append to the container as well;
+		 * that file can be pulled afterwards with
+		 *   xcrun devicectl device copy from --domain-type appDataContainer \
+		 *     --domain-identifier <appex bundle id> --source Documents/<name>
+		 * which is the only way to see the numbers that actually matter -- the
+		 * standalone's are the easy case and were never the question. */
+		if(const auto* home = std::getenv("HOME"))
+		{
+			const std::string path = std::string(home) + "/Documents/n2x_audio_stats.log";
+			if(auto* f = fopen(path.c_str(), "a"))
+			{
+				// the file is appended to across runs; mark where each one starts so
+				// a 64-frame session is never read as part of a 256-frame one
+				static bool s_sessionBannerWritten = false;
+				if(!s_sessionBannerWritten)
+				{
+					s_sessionBannerWritten = true;
+					fprintf(f, "=== session start, pid %d ===\n", static_cast<int>(getpid()));
+				}
+				fprintf(f, "%s\n", line.str().c_str());
+				fclose(f);
+			}
+		}
+
+		s = AudioWaitStats{};
+	}
+#endif
 	
 	void Hardware::processAudio(const synthLib::TAudioOutputs& _outputs, const uint32_t _frames, const uint32_t _latency)
 	{
