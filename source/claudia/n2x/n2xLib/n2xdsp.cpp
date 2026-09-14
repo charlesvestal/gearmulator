@@ -167,7 +167,14 @@ namespace n2x
 
 	void DSP::hdiSendIrqToDSP(const uint8_t _irq)
 	{
-		if(m_hardware.requestingHaltDSPs() && getHaltDSP().isHalting())
+		// JIT builds only. The shortcut below enters compiled code directly, which
+		// an interpreter build does not have -- and on iOS can never have, since
+		// the trampoline needs an executable mapping the OS will not grant. Taking
+		// it there runs no interrupt at all and the UC then waits forever for an
+		// acknowledgement, which is why this hung intermittently: the branch is
+		// only reached while the DSPs are being halted. The path below resumes
+		// both DSPs anyway, so the interrupt still gets executed promptly.
+		if(dsp56k::g_useJIT && m_hardware.requestingHaltDSPs() && getHaltDSP().isHalting())
 		{
 			// this is a very hacky way to execute a DSP interrupt even though the DSP is halted. This case happens if the DSPs run too fast
 			// and are halted by the sync code, but the UC wants to inject an interrupt, which needs to be executed immediately.
