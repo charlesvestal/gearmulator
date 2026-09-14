@@ -57,8 +57,21 @@ void EditorWindow::resized()
 
 	const auto scale = std::min(scaleX, scaleY);
 
-	if (!m_state.resizeEditor(w,h))
+	/* Fit the skin INSIDE the space we were given and centre it, rather than
+	 * handing the editor the raw bounds. The skin has a fixed aspect ratio; on
+	 * the desktop the window constrainer enforces it, so fitW/fitH come back as
+	 * w/h and this changes nothing. A host that dictates our bounds -- every iOS
+	 * AUv3 -- hands us an arbitrary rectangle instead, and passing it through
+	 * meant the UI was simply wider than the view and clipped at one edge.
+	 * Letter/pillarboxing keeps the whole panel visible and undistorted. */
+	const auto fitW = static_cast<int>(static_cast<float>(m_state.getWidth())  * scale);
+	const auto fitH = static_cast<int>(static_cast<float>(m_state.getHeight()) * scale);
+
+	if (!m_state.resizeEditor(fitW, fitH))
 		return;
+
+	if (auto* root = m_state.getUiRoot())
+		root->setTopLeftPosition((w - fitW) / 2, (h - fitH) / 2);
 
 	const auto percent = 100.f * scale / m_state.getRootScale();
 	m_config.setValue("scale", percent);
@@ -113,8 +126,40 @@ void EditorWindow::setGuiScale(const float _percent)
 
 	const auto s = _percent / 100.0f * m_state.getRootScale();
 
-	const auto w = static_cast<int>(static_cast<float>(m_state.getWidth()) * s);
-	const auto h = static_cast<int>(static_cast<float>(m_state.getHeight()) * s);
+	auto w = static_cast<int>(static_cast<float>(m_state.getWidth()) * s);
+	auto h = static_cast<int>(static_cast<float>(m_state.getHeight()) * s);
+
+#if JUCE_IOS
+	/* Never ask for more room than exists. On the desktop an oversized editor just
+	 * makes a bigger window; in an iOS AUv3 the view is clipped to what the host
+	 * gives us, and since resized() then sees OUR inflated bounds rather than the
+	 * host's, its fit-to-size maths computes a scale of ~1 and does nothing. The
+	 * panel ends up scaled to the height and cut off at one side.
+	 *
+	 * Cap against the parent if we are already in the hierarchy, otherwise against
+	 * the display, which is the upper bound for any host view. */
+	juce::Rectangle<int> avail;
+
+	if (const auto* parent = getParentComponent())
+		avail = parent->getLocalBounds();
+
+	if (avail.isEmpty())
+	{
+		if (const auto* display = juce::Desktop::getInstance().getDisplays().getPrimaryDisplay())
+			avail = display->userArea;
+	}
+
+	if (!avail.isEmpty() && w > 0 && h > 0)
+	{
+		const auto fit = std::min(static_cast<float>(avail.getWidth())  / static_cast<float>(w),
+		                          static_cast<float>(avail.getHeight()) / static_cast<float>(h));
+		if (fit < 1.0f)
+		{
+			w = static_cast<int>(static_cast<float>(w) * fit);
+			h = static_cast<int>(static_cast<float>(h) * fit);
+		}
+	}
+#endif
 
 	setSize(w, h);
 
@@ -134,7 +179,26 @@ void EditorWindow::setUiRoot(juce::Component* _component)
 		return;
 
 	m_sizeConstrainer.setMinimumSize(m_state.getWidth() / 10, m_state.getHeight() / 10);
-	m_sizeConstrainer.setMaximumSize(m_state.getWidth() * 4, m_state.getHeight() * 4);
+
+	auto maxW = m_state.getWidth() * 4;
+	auto maxH = m_state.getHeight() * 4;
+
+#if JUCE_IOS
+	/* Bound the constrainer by the screen. With a fixed aspect ratio and a maximum
+	 * of 4x native, handing it a full-screen rectangle makes it satisfy the ratio by
+	 * GROWING the width past the display edge: measured 1376x1032 of screen turning
+	 * into a 1961x1032 editor, i.e. scaled to the height with ~600px hanging off the
+	 * side. That is the whole "cut off on one side" symptom, and it happens after
+	 * setGuiScale() has already capped us correctly, which is why capping alone did
+	 * not fix it. There is no window to drag on iOS, so a 4x maximum buys nothing. */
+	if (const auto* display = juce::Desktop::getInstance().getDisplays().getPrimaryDisplay())
+	{
+		maxW = std::min(maxW, display->userArea.getWidth());
+		maxH = std::min(maxH, display->userArea.getHeight());
+	}
+#endif
+
+	m_sizeConstrainer.setMaximumSize(maxW, maxH);
 
 	m_sizeConstrainer.setFixedAspectRatio(static_cast<double>(m_state.getWidth()) / static_cast<double>(m_state.getHeight()));
 	
@@ -157,6 +221,13 @@ void EditorWindow::timerCallback()
 
 void EditorWindow::fixParentWindowSize() const
 {
+#if JUCE_IOS
+	/* Growing the parent is a workaround for a JUCE VST3 bug (see the caller). On
+	 * iOS the parent chain ends at a view the HOST owns and sizes; we cannot make
+	 * it bigger, and trying leaves our component larger than the visible area, so
+	 * the panel gets clipped at one edge. resized() fits and centres instead. */
+	return;
+#else
 	const auto w = getWidth();
 	const auto h = getHeight();
 
@@ -174,5 +245,6 @@ void EditorWindow::fixParentWindowSize() const
 
 		parent = parent->getParentComponent();
 	}
+#endif
 }
 }
