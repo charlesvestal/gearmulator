@@ -26,6 +26,20 @@ namespace virusLib
 
 		m_buffer.resize(dsp56k::alignedSize(requiredMemSize));
 
+		/* Opt in to bounded-backlog recovery.
+		 *
+		 * Without it a dip below real time is permanent: the input ring fills
+		 * with work the DSP still owes -- up to 0.68 s at 48 kHz -- and only the
+		 * DSP can retire it, so removing the load that caused the dip does not
+		 * bring the synth back and the plugin has to be reloaded. Verified on an
+		 * iPad Pro M5 in AUM: three OsTIrus instances plus JE-8086 broke up, and
+		 * removing two of them recovered with no reload.
+		 *
+		 * Deliberately NOT the default in Audio: the NodalRed2x pre-fills its
+		 * input ring by design, so the same bound hangs it. Each board has to say
+		 * whether depth means "behind" or "as intended". */
+		m_audio.setMaxInputBacklog(8192);
+
 		auto* buf = m_buffer.data();
 		buf = dsp56k::alignedAddress(buf);
 
