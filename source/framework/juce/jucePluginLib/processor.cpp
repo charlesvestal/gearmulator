@@ -713,8 +713,16 @@ namespace pluginLib
 	    if (_busesLayout.getMainOutputChannelSet() != juce::AudioChannelSet::stereo())
 	        return false;
 
-	    // This checks if the input is stereo
-	    if (_busesLayout.getMainInputChannelSet() != juce::AudioChannelSet::stereo())
+	    // The input may legitimately be absent: NodalRed2x declares no input bus at
+	    // all, so getMainInputChannelSet() is disabled() and demanding stereo here
+	    // refused EVERY layout for it. Desktop hosts shrug and use the default
+	    // layout, but the iOS standalone negotiates against the device, has every
+	    // candidate rejected, and then calls processBlock with a buffer narrower
+	    // than getTotalNumOutputChannels() reports -- getWritePointer() past the end
+	    // returns null and the audio thread dies in memset.
+	    const auto in = _busesLayout.getMainInputChannelSet();
+
+	    if (!in.isDisabled() && in != juce::AudioChannelSet::stereo())
 	        return false;
 
 	    return true;
@@ -800,7 +808,15 @@ namespace pluginLib
 	    // This is here to avoid people getting screaming feedback
 	    // when they first compile a plugin, but obviously you don't need to keep
 	    // this code if your algorithm always overwrites all the output channels.
-	    for (auto i = totalNumInputChannels; i < totalNumOutputChannels; ++i)
+	    // Clamp to what the BUFFER actually carries, not to what the bus layout
+	    // declares. A host -- or the iOS standalone, whose device is stereo -- can
+	    // hand over fewer channels than the plugin advertises, and clear()/
+	    // getWritePointer() past the end return null. memset(nullptr) then takes
+	    // the audio thread down: EXC_BAD_ACCESS at 0x0 inside _platform_memset.
+	    const auto availableOut = std::min(totalNumOutputChannels, buffer.getNumChannels());
+	    const auto availableIn  = std::min(totalNumInputChannels,  buffer.getNumChannels());
+
+	    for (auto i = availableIn; i < availableOut; ++i)
 			buffer.clear (i, 0, numSamples);
 
 	    // This is the place where you'd normally do the guts of your plugin's
@@ -813,10 +829,10 @@ namespace pluginLib
 	    synthLib::TAudioInputs inputs{};
 	    synthLib::TAudioOutputs outputs{};
 
-		for (int channel = 0; channel < totalNumInputChannels; ++channel)
+		for (int channel = 0; channel < availableIn; ++channel)
 			inputs[channel] = buffer.getReadPointer(channel);
 
-		for (int channel = 0; channel < totalNumOutputChannels; ++channel)
+		for (int channel = 0; channel < availableOut; ++channel)
 			outputs[channel] = buffer.getWritePointer(channel);
 
 		for(const auto metadata : midiMessages)
