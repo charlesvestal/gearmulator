@@ -168,11 +168,26 @@ else()
 	set(TUS_IOS_PERMISSIONS "")
 endif()
 
+# Application icon, by convention: a plugin that ships assets/icon.png gets it as
+# its ICON_BIG. Upstream never set one because these are built as VST3/AU/CLAP,
+# where the host shows no app icon -- but the iOS build produces a Standalone app
+# AND an AUv3, and both get an icon slot on the home screen and in a host's plugin
+# browser. Without this every one of them is blank.
+#
+# juceaide generates the whole platform icon set (the full iOS AppIcon ladder from
+# 20x20 up to 1024x1024) from this single source, so it wants a large square PNG;
+# 1024x1024 covers every slot. It is NOT a skin asset and deliberately not part of
+# the binary data blob.
 macro(createJucePlugin targetName productName isSynth plugin4CC binaryDataProject synthLibProject)
+	set(TUS_PLUGIN_ICON "")
+	if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/assets/icon.png")
+		set(TUS_PLUGIN_ICON ICON_BIG "${CMAKE_CURRENT_SOURCE_DIR}/assets/icon.png")
+	endif()
+
 	juce_add_plugin(${targetName}
 		${TUS_IOS_PERMISSIONS}
+		${TUS_PLUGIN_ICON}
 		# VERSION ...                                     # Set this if the plugin version is different to the project version
-		# ICON_BIG ...                                    # ICON_* arguments specify a path to an image file to use as an icon for the Standalone
 		# ICON_SMALL ...
 		COMPANY_NAME "The Usual Suspects"                 # Specify the name of the plugin's author
 		COMPANY_WEBSITE "https://dsp56300.wordpress.com"
