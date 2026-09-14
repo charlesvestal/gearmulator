@@ -72,6 +72,21 @@ namespace xt
 		m_periphX.getEssi0().writeEmptyAudioIn(64);
 		m_periphX.getEssi1().writeEmptyAudioIn(64);
 
+		/* Shed an unrecoverable input backlog -- see the long note in
+		 * virusLib/dspSingle.cpp. Without it a dip below real time is PERMANENT:
+		 * the ring fills with work only the DSP can retire, so removing the load
+		 * that caused the dip does not bring the synth back. Reported on an iPad
+		 * Pro M5: switching FM on and turning it up broke up and stayed broken.
+		 *
+		 * The pre-fill just above is 64 frames, three orders of magnitude under
+		 * this bound, so it cannot trip the recovery. An earlier note in
+		 * virusLib claimed the pre-fill made this bound hang the NodalRed2x; that
+		 * was measured before the bus-layout crash in jucePluginLib::Processor
+		 * was found, and is very likely that crash rather than this bound. */
+		// ESSI0 only: ESSI1 is the inter-DSP ring, where a dropped frame desyncs
+		// the voice-expansion handshake rather than catching anything up.
+		m_periphX.getEssi0().setMaxInputBacklog(8192);
+
 		hdi08().setRXRateLimit(0);
 		hdi08().setTransmitDataAlwaysEmpty(false);
 

@@ -35,9 +35,16 @@ namespace virusLib
 		 * iPad Pro M5 in AUM: three OsTIrus instances plus JE-8086 broke up, and
 		 * removing two of them recovered with no reload.
 		 *
-		 * Deliberately NOT the default in Audio: the NodalRed2x pre-fills its
-		 * input ring by design, so the same bound hangs it. Each board has to say
-		 * whether depth means "behind" or "as intended". */
+		 * Deliberately NOT the default in Audio: each board has to say whether
+		 * depth means "behind" or "as intended", and the inter-DSP rings of the
+		 * Xenia/Vavra voice expansion mean "as intended" -- a dropped frame there
+		 * desyncs the expansion handshake instead of catching anything up. The
+		 * NodalRed2x and the Xenia's ESSI0 now opt in as well; the pre-fills they
+		 * do (2 and 64 frames) are far under this bound and cannot trip it. An
+		 * earlier version of this note claimed that pre-fill made the bound hang
+		 * the NodalRed2x -- that was measured before the bus-layout crash in
+		 * jucePluginLib::Processor::isBusesLayoutSupported() was found, and was
+		 * very likely that crash. */
 		m_audio.setMaxInputBacklog(8192);
 
 		auto* buf = m_buffer.data();
