@@ -1,4 +1,5 @@
 #include "settings.h"
+#include "juceRmlUi/juceRmlComponent.h"
 
 #include "pluginEditor.h"
 #include "pluginProcessor.h"
@@ -67,6 +68,26 @@ namespace jucePluginEditorLib
 				c.saveIfNeeded();
 				return;
 			}
+			/* An iOS APP EXTENSION cannot reliably present a UIAlertController: it has
+			 * no key window and its view-controller chain is the host's, so the alert
+			 * never appears. Confirmed from the outside -- this button works in the
+			 * standalone app and does nothing in AUM, which is the same binary.
+			 *
+			 * Skipping the confirmation is the lesser evil. The alternative is that the
+			 * option, and the DSP clock it gates, stay permanently unreachable in a
+			 * HOST, which is exactly where a marginal device needs to underclock. The
+			 * warning is advisory and the user has just deliberately tapped the control.
+			 * The proper fix is an in-panel RmlUi confirmation that owes nothing to
+			 * UIKit; until then, reachable beats warned-about-but-impossible. */
+			if (m_editor.getProcessor().wrapperType == juce::AudioProcessor::wrapperType_AudioUnitv3)
+			{
+				enableAdvancedOptions(true);
+				juceRmlUi::ElemButton::setChecked(bt, true);
+				c.setValue(g_allowAdvancedOptions, juce::var(true));
+				c.saveIfNeeded();
+				return;
+			}
+
 			genericUI::MessageBox::showOkCancel(
 				genericUI::MessageBox::Icon::Warning, 
 				"Warning", 
@@ -80,7 +101,10 @@ namespace jucePluginEditorLib
 						c.setValue(g_allowAdvancedOptions, juce::var(true));
 						c.saveIfNeeded();
 					}
-				});
+				},
+				// present from the editor's component, or iOS has no view controller to
+				// show the alert from and the option can never be switched on
+				m_editor.getRmlComponent());
 		});
 	}
 

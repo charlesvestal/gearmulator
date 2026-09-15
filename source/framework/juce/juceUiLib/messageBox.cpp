@@ -32,14 +32,14 @@ namespace genericUI
 		}
 	}
 
-	void MessageBox::showYesNo(const Icon _icon, const std::string& _header, const std::string& _message, Callback _callback)
+	void MessageBox::showYesNo(const Icon _icon, const std::string& _header, const std::string& _message, Callback _callback, juce::Component* _associatedComponent/* = nullptr*/)
 	{
-		juce::NativeMessageBox::showYesNoBox(toJuceIcon(_icon), juce::String::fromUTF8(_header.c_str()), juce::String::fromUTF8(_message.c_str()), nullptr, addCallback(std::move(_callback)));
+		juce::NativeMessageBox::showYesNoBox(toJuceIcon(_icon), juce::String::fromUTF8(_header.c_str()), juce::String::fromUTF8(_message.c_str()), _associatedComponent, addCallback(std::move(_callback)));
 	}
 
-	void MessageBox::showOkCancel(const Icon _icon, const std::string& _header, const std::string& _message, Callback _callback)
+	void MessageBox::showOkCancel(const Icon _icon, const std::string& _header, const std::string& _message, Callback _callback, juce::Component* _associatedComponent/* = nullptr*/)
 	{
-		juce::NativeMessageBox::showOkCancelBox(toJuceIcon(_icon), juce::String::fromUTF8(_header.c_str()), juce::String::fromUTF8(_message.c_str()), nullptr, addCallback(std::move(_callback)));
+		juce::NativeMessageBox::showOkCancelBox(toJuceIcon(_icon), juce::String::fromUTF8(_header.c_str()), juce::String::fromUTF8(_message.c_str()), _associatedComponent, addCallback(std::move(_callback)));
 	}
 
 	void MessageBox::showOk(const Icon _icon, const std::string& _header, const std::string& _message, juce::Component* _associatedComponent/* = nullptr*/)
