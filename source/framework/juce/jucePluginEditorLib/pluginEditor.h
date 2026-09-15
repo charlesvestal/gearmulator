@@ -1,5 +1,7 @@
 #pragma once
 
+#include <chrono>
+
 #include "parameterOverlays.h"
 #include "settingsDeviceSpecific.h"
 #include "skin.h"
@@ -255,6 +257,23 @@ namespace jucePluginEditorLib
 
 		juceRmlUi::RmlInterfaces m_rmlInterfaces;
 		std::unique_ptr<juceRmlUi::RmlComponent> m_rmlComponent;
+
+#if JUCE_IOS
+		/* Long-press stands in for a right click on a touch screen. helper::
+		 * isContextMenu() answers true only for MouseButton::Right, plus ctrl+left on
+		 * macOS -- a touch arrives as a plain Left with no modifier, so on iOS it can
+		 * never be true and the context menu is unreachable. That menu is the ONLY
+		 * route to the settings pages, so the DSP clock -- the one control that makes a
+		 * marginal device keep up, by underclocking the emulated DSP -- could not be
+		 * reached at all. It also gates every per-parameter menu (MIDI learn, lock).
+		 *
+		 * Decided on release rather than by a timer: openMenu() wants a live event for
+		 * positioning, and holding one past its lifetime to fire from a callback is the
+		 * more fragile design. */
+		std::chrono::steady_clock::time_point m_touchDownTime;
+		Rml::Vector2<float> m_touchDownPos{};
+		bool m_touchDownValid = false;
+#endif
 
 		bool m_midiLearnModeActive = false;
 		pluginLib::Parameter* m_midiLearnSelectedParam = nullptr;

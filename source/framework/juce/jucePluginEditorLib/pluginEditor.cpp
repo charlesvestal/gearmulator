@@ -131,8 +131,65 @@ namespace jucePluginEditorLib
 				_event.StopPropagation();
 				if (!settingsOpened())
 					openMenu(_event);
+				return;
 			}
+
+#if JUCE_IOS
+			// remember the press so Mouseup can tell a long press from a tap or a drag
+			if (juceRmlUi::helper::getMouseButton(_event) == juceRmlUi::MouseButton::Left)
+			{
+				m_touchDownTime = std::chrono::steady_clock::now();
+				m_touchDownPos = juceRmlUi::helper::getMousePos(_event);
+				m_touchDownValid = true;
+			}
+#endif
 		});
+
+#if JUCE_IOS
+		// Long press == right click. See the note on m_touchDownTime in the header:
+		// without this the context menu, and therefore every settings page including
+		// the DSP clock, is unreachable on a touch screen.
+		juceRmlUi::EventListener::Add(doc, Rml::EventId::Mouseup, [this](Rml::Event& _event)
+		{
+			if (!m_touchDownValid)
+				return;
+
+			m_touchDownValid = false;
+
+			if (juceRmlUi::helper::getMouseButton(_event) != juceRmlUi::MouseButton::Left)
+				return;
+
+			/* Do not go anywhere near the settings UI. An earlier version of this
+			 * called StopPropagation() as soon as it decided a press was long, before
+			 * checking this -- so any deliberate tap on a settings control that happened
+			 * to be held a little was SWALLOWED and never reached the button. That is
+			 * what made "allow advanced options" unselectable, and with it the DSP clock
+			 * it gates. The menu is only needed to REACH the settings; once they are
+			 * open this has no business intercepting anything. */
+			if (settingsOpened())
+				return;
+
+			constexpr auto holdMs = 700;		// well past a deliberate tap
+			constexpr auto slopPx = 12.0f;		// a knob drag moves further than this
+
+			const auto held = std::chrono::duration_cast<std::chrono::milliseconds>(
+				std::chrono::steady_clock::now() - m_touchDownTime).count();
+
+			if (held < holdMs)
+				return;
+
+			const auto pos = juceRmlUi::helper::getMousePos(_event);
+			const auto dx = pos.x - m_touchDownPos.x;
+			const auto dy = pos.y - m_touchDownPos.y;
+
+			if (dx * dx + dy * dy > slopPx * slopPx)
+				return;			// that was a drag, not a press-and-hold
+
+			// consume it only because we are acting on it
+			_event.StopPropagation();
+			openMenu(_event);
+		});
+#endif
 
 #if _DEBUG
 		juceRmlUi::EventListener::Add(getRmlRootElement(), Rml::EventId::Keydown, [this](Rml::Event& _event)
