@@ -21,6 +21,7 @@ namespace jucePluginEditorLib
 
 	private:
 		void setGuiScale(float _percent);
+		void updateSizeConstraints();
 		void setUiRoot(juce::Component* _component);
 
 		void timerCallback() override;

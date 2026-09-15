@@ -42,8 +42,38 @@ EditorWindow::~EditorWindow()
 	setUiRoot(nullptr);
 }
 
+void EditorWindow::updateSizeConstraints()
+{
+	auto maxW = m_state.getWidth() * 4;
+	auto maxH = m_state.getHeight() * 4;
+
+#if JUCE_IOS
+	/* Bound the constrainer by the screen. With a fixed aspect ratio and a maximum of
+	 * 4x native, handing it a full-screen rectangle makes it satisfy the ratio by
+	 * GROWING the width past the display edge -- measured on an iPad as a 1376x1032
+	 * screen producing a 1961x1032 editor, ~585px hanging off the side. There is no
+	 * window to drag on iOS, so a 4x maximum buys nothing.
+	 *
+	 * Recomputed on every resize, not once at setup: ROTATING the device swaps the
+	 * display bounds, and a cap left at the previous orientation's numbers scales the
+	 * panel wrongly for the new one. */
+	if (const auto* display = juce::Desktop::getInstance().getDisplays().getPrimaryDisplay())
+	{
+		maxW = std::min(maxW, display->userArea.getWidth());
+		maxH = std::min(maxH, display->userArea.getHeight());
+	}
+#endif
+
+	m_sizeConstrainer.setMaximumSize(maxW, maxH);
+}
+
 void EditorWindow::resized()
 {
+#if JUCE_IOS
+	// orientation may have changed since the last call
+	updateSizeConstraints();
+#endif
+
 	AudioProcessorEditor::resized();
 
 	if(!m_state.getWidth() || !m_state.getHeight())
@@ -180,25 +210,7 @@ void EditorWindow::setUiRoot(juce::Component* _component)
 
 	m_sizeConstrainer.setMinimumSize(m_state.getWidth() / 10, m_state.getHeight() / 10);
 
-	auto maxW = m_state.getWidth() * 4;
-	auto maxH = m_state.getHeight() * 4;
-
-#if JUCE_IOS
-	/* Bound the constrainer by the screen. With a fixed aspect ratio and a maximum
-	 * of 4x native, handing it a full-screen rectangle makes it satisfy the ratio by
-	 * GROWING the width past the display edge: measured 1376x1032 of screen turning
-	 * into a 1961x1032 editor, i.e. scaled to the height with ~600px hanging off the
-	 * side. That is the whole "cut off on one side" symptom, and it happens after
-	 * setGuiScale() has already capped us correctly, which is why capping alone did
-	 * not fix it. There is no window to drag on iOS, so a 4x maximum buys nothing. */
-	if (const auto* display = juce::Desktop::getInstance().getDisplays().getPrimaryDisplay())
-	{
-		maxW = std::min(maxW, display->userArea.getWidth());
-		maxH = std::min(maxH, display->userArea.getHeight());
-	}
-#endif
-
-	m_sizeConstrainer.setMaximumSize(maxW, maxH);
+	updateSizeConstraints();
 
 	m_sizeConstrainer.setFixedAspectRatio(static_cast<double>(m_state.getWidth()) / static_cast<double>(m_state.getHeight()));
 	
