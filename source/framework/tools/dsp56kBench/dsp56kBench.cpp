@@ -30,6 +30,19 @@
 #include "dsp56kEmu/dspconfig.h"
 #include "synthLib/device.h"
 
+#ifdef __APPLE__
+#include <TargetConditionals.h>
+#endif
+#if defined(TARGET_OS_IPHONE) && TARGET_OS_IPHONE
+#include <CoreFoundation/CoreFoundation.h>
+#include <unistd.h>
+#define BENCH_IOS 1
+// The app delegate in iosmain.mm is the real entry point on iOS.
+#define main dsp56kBenchMain
+#else
+#define BENCH_IOS 0
+#endif
+
 /* Only ONE of these is ever defined: see the CMakeLists for why the synth libs
  * cannot share a binary. */
 #if BENCH_HAS_VIRUS
@@ -153,6 +166,45 @@ namespace
 
 int main(int _argc, char* _argv[])
 {
+#if BENCH_IOS
+	/* An iOS app is launched with no argv and a working directory of "/", but
+	 * every ROM loader in this tree discovers files relative to the current
+	 * directory. Move into the bundle's Resources, where the ROMs are copied. */
+	{
+		CFBundleRef bundle = CFBundleGetMainBundle();
+		CFURLRef resUrl = bundle ? CFBundleCopyResourcesDirectoryURL(bundle) : nullptr;
+		char resPath[PATH_MAX] = {};
+		if(resUrl && CFURLGetFileSystemRepresentation(resUrl, TRUE, reinterpret_cast<UInt8*>(resPath), sizeof(resPath)))
+			chdir(resPath);
+		if(resUrl)
+			CFRelease(resUrl);
+		printf("bench: cwd=%s\n", resPath);
+	}
+
+	/* Several loggers in this tree write straight to stdout/stderr, and pushing
+	 * that volume through the device console is slow enough to distort a
+	 * measurement. Send stdout to a file in the app container -- retrieved with
+	 *   devicectl device copy from --domain-type appDataContainer
+	 * -- and drop the per-bus-access chatter on stderr entirely. */
+	{
+		const char* home = getenv("HOME");
+		static char logPath[PATH_MAX] = {};
+		snprintf(logPath, sizeof(logPath), "%s/Documents/dsp56kBench.log", home ? home : "/tmp");
+		if(!freopen(logPath, "w", stdout))
+			printf("bench: could not redirect stdout to %s\n", logPath);
+		setvbuf(stdout, nullptr, _IOLBF, 0);
+		freopen("/dev/null", "w", stderr);
+	}
+
+	/* Defaults, since there is no command line to read them from. */
+	const char* iosArgv[] = {"dsp56kBench", BENCH_IOS_SYNTH, "", "5", "4", "100", "3"};
+	if(_argc < 2)
+	{
+		_argc = 7;
+		_argv = const_cast<char**>(iosArgv);
+	}
+#endif
+
 	if(_argc < 2)
 	{
 		fprintf(stderr, "usage: %s <virus|virusA|virusB|virusTI|xt|xtve|mq|n2x> [rom] [seconds] [voices] [dspClockPercent] [repeats]\n"
@@ -325,3 +377,11 @@ int main(int _argc, char* _argv[])
 
 	return 0;
 }
+
+#if BENCH_IOS
+// Entry point called by the iOS app delegate on a background queue.
+extern "C" int runDsp56kBench()
+{
+	return dsp56kBenchMain(0, nullptr);
+}
+#endif
