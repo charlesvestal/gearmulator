@@ -1,4 +1,8 @@
 #include "processor.h"
+#include <cmath>
+#include <atomic>
+#include <cstdlib>
+#include <cstdio>
 
 #include <chrono>
 
@@ -886,6 +890,64 @@ namespace pluginLib
 		}
 
 		getPlugin().process(inputs, outputs, numSamples, bpm, ppqPos, isPlaying, hasPpqPosition);
+
+#if TUS_AUDIO_HEALTH
+		/* Generic audio-path health log, OFF by default (-DTUS_AUDIO_HEALTH=1).
+		 *
+		 * An AUv3 is its own extension process on iOS, so its stdout never reaches a
+		 * console attached to the host -- the only way to see what an AU did is to
+		 * leave a trail in its container and pull it afterwards. This reports, every
+		 * ~2s of audio: blocks seen, wall time between reports, whether the output was
+		 * SILENT (peak below -120dBFS), and the emulated DSP clock, which is the one
+		 * number that says whether the engine is still running at all.
+		 *
+		 * The pair matters: silent output with a healthy clock is a routing or state
+		 * problem, silent output with a dead clock is the engine having stopped, and a
+		 * long gap between reports is the process having been suspended, and no reports
+		 * at all is the host having stopped calling us. Those four look identical from
+		 * the front, which is why "it stopped making sound after backgrounding" needs
+		 * this rather than a guess. */
+		{
+			static std::atomic_uint64_t s_frames{0}, s_blocks{0};
+			static std::atomic<float> s_peak{0.0f};
+			static auto s_last = std::chrono::steady_clock::now();
+
+			float peak = 0.0f;
+			for (int ch = 0; ch < availableOut; ++ch)
+			{
+				if (const auto* p = buffer.getReadPointer(ch))
+					for (int i = 0; i < numSamples; ++i)
+						peak = std::max(peak, std::abs(p[i]));
+			}
+			s_peak.store(std::max(s_peak.load(std::memory_order_relaxed), peak), std::memory_order_relaxed);
+			s_blocks.fetch_add(1, std::memory_order_relaxed);
+
+			if (s_frames.fetch_add(static_cast<uint64_t>(numSamples), std::memory_order_relaxed) + numSamples
+				>= static_cast<uint64_t>(m_hostSamplerate * 2.0f))
+			{
+				const auto now = std::chrono::steady_clock::now();
+				const auto gapMs = std::chrono::duration<double, std::milli>(now - s_last).count();
+				s_last = now;
+
+				const auto pk = s_peak.exchange(0.0f, std::memory_order_relaxed);
+
+				if (const auto* home = std::getenv("HOME"))
+				{
+					const std::string path = std::string(home) + "/Documents/tus_audio_health.log";
+					if (auto* f = fopen(path.c_str(), "a"))
+					{
+						fprintf(f, "blocks=%llu size=%d gap=%.0fms peak=%.6f %s latency=%u\n",
+							static_cast<unsigned long long>(s_blocks.exchange(0, std::memory_order_relaxed)),
+							numSamples, gapMs, static_cast<double>(pk),
+							pk < 0.000001f ? "SILENT" : "audio",
+							getCurrentLatency());
+						fclose(f);
+					}
+				}
+				s_frames.store(0, std::memory_order_relaxed);
+			}
+		}
+#endif
 
 		// Both checks are plain atomic loads, cheap enough per block. The work they stand for
 		// belongs to the message thread, see handleAsyncUpdate().
