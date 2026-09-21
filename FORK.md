@@ -13,7 +13,7 @@ starts failing, with nothing in that repo to say why. Hence this file.
 
 | Consumer repo | Its branch | gearmulator pin | Kept alive by | dsp56300 gitlink | Kept alive by (in the dsp56300 fork) |
 |---|---|---|---|---|---|
-| `gearmulator-ios` | `main`, `ios-bench` | `ef9d658b` | `integration/ios-move` (head) | `2155545e` | **`ios-move-on-sep21` — only ref** |
+| `gearmulator-ios` | `main`, `ios-bench` | tracks the head | `integration/ios-move` | tracks the head | **`ios-move-on-sep21` — only ref** |
 | `schwung-jp8000` | `ios-auv3` | `ef72c4f0` | `integration/ios-move` (ancestor) | `657f4004` | **`integration/ios-move` — only ref** |
 | `je8086-ios` | `ios-auv3` | `5a9512f2` | `integration/ios-move` (ancestor) | `317b84d3` | `ios-asmjit-bump`, `interp-dispatch-port` |
 | `schwung-vavra` | `main` | `d7c692c1` | `dsp56k-bench` (head), also an ancestor of `integration/ios-move` | `317b84d3` | as above |
