@@ -11,6 +11,7 @@
 #include "buildconfig.h"
 #include "midiTranslator.h"
 
+#include "baseLib/compilerdefs.h"
 #include "baseLib/md5.h"
 
 namespace synthLib
