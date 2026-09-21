@@ -186,6 +186,9 @@ namespace juceRmlUi
 					Rml::LoadFontFace(m_coreInstance, file, true);
 				}
 			}
+
+			if (_config.systemFallbackFonts)
+				m_rmlInterfaces.loadSystemFallbackFonts();
 		}
 
 		try
@@ -379,13 +382,10 @@ namespace juceRmlUi
 
 		using namespace juce::gl;
 
-        GLint viewport[4];
-        glGetIntegerv(GL_VIEWPORT, viewport);
+		GLint viewport[4];
+		glGetIntegerv(GL_VIEWPORT, viewport);
 
 		const Rml::Vector2i size{viewport[2], viewport[3]};
-
-		glDisable(GL_DEBUG_OUTPUT);
-		glDisable(GL_DEBUG_OUTPUT_SYNCHRONOUS);
 
 		glClearColor(0, 0, 0, 1);
 		glClear(GL_COLOR_BUFFER_BIT);
@@ -481,6 +481,15 @@ namespace juceRmlUi
 			Rml::Log::Message(Rml::Log::LT_ERROR, "Failed to initialize Metal renderer, falling back to software");
 			m_renderInterface.reset();
 			m_renderType = Renderer::Software;
+			// Detaching joins this render thread and removes the native view covering the software renderer.
+			juce::MessageManager::callAsync([safe = juce::Component::SafePointer<RmlComponent>(this)]
+			{
+				if (!safe)
+					return;
+				safe->m_metalContext.reset();
+				safe->m_renderDone = true;
+				safe->enqueueUpdate();
+			});
 			return;
 		}
 
@@ -563,6 +572,9 @@ namespace juceRmlUi
 
 	void RmlComponent::metalContextClosing(MetalContext&)
 	{
+		if (m_renderType == Renderer::Software)
+			return;
+
 		m_renderProxy->setRenderer(nullptr, g_renderConfigSoftware);
 		m_renderInterface.reset();
 	}
@@ -821,15 +833,19 @@ namespace juceRmlUi
 		if (!changes)
 			return;
 
+		const bool shiftChanged = _modifiers.isShiftDown() != m_currentModifierKeys.isShiftDown();
 		m_currentModifierKeys = _modifiers;
 
 		RmlInterfaces::ScopedAccess access(*this);
 
-		// generate a fake key event to trigger the modifier change
-		if (changes > 0)
-			m_rmlContext->ProcessKeyDown(Rml::Input::KI_UNKNOWN, toRmlModifiers(_modifiers));
+		// Generate a key event to carry the modifier change. JUCE reports Shift only this way, never as
+		// a key press, and can't tell the left key from the right, so a Shift change goes out as the
+		// left Shift key, which a listener can bind like any other.
+		const auto key = shiftChanged ? Rml::Input::KI_LSHIFT : Rml::Input::KI_UNKNOWN;
+		if (shiftChanged ? _modifiers.isShiftDown() : changes > 0)
+			m_rmlContext->ProcessKeyDown(key, toRmlModifiers(_modifiers));
 		else
-			m_rmlContext->ProcessKeyUp(Rml::Input::KI_UNKNOWN, toRmlModifiers(_modifiers));
+			m_rmlContext->ProcessKeyUp(key, toRmlModifiers(_modifiers));
 		enqueueUpdate();
 	}
 
@@ -1029,7 +1045,15 @@ namespace juceRmlUi
 		// problem: an off-screen CAMetalLayer keeps handing out drawables immediately instead of blocking on vsync,
 		// so the render pipeline loses its pacing and burns the GPU while the editor is hidden or minimized.
 		// The software and OpenGL renderers get this for free from juce, the Metal renderer drives its own thread.
-		const bool visible = isOnScreen() || m_screenshotState == ScreenshotState::RequestScreenshot;
+		const bool onScreen = isOnScreen();
+
+		// A pending screenshot forces a frame, but the software renderer cannot serve it off screen: it draws in
+		// paint(), which juce does not call then. The frame would hold m_renderDone until the editor is painted
+		// again, and the request would refuse every other one until then, so drop it instead.
+		if (!onScreen && m_renderType == Renderer::Software && m_screenshotState == ScreenshotState::RequestScreenshot)
+			m_screenshotState = ScreenshotState::NoScreenshot;
+
+		const bool visible = onScreen || m_screenshotState == ScreenshotState::RequestScreenshot;
 
 		m_updating = true;
 		m_renderDone = false;
@@ -1266,6 +1290,15 @@ namespace juceRmlUi
 		m_renderProxy->executeRenderFunctions();
 
 		r->endFrame(getOpenGLRenderingScale());
+
+		// Serve a screenshot from the frame just drawn. Copy it, the next frame is drawn into the same image. It is
+		// sized in render pixels, so above a render scale of 1 it is larger than the component, like the OpenGL
+		// viewport that renderOpenGL() reads back.
+		if (m_screenshotState == ScreenshotState::RequestScreenshot)
+		{
+			m_screenshot = r->getRenderImage()->createCopy();
+			m_screenshotState = ScreenshotState::ScreenshotReady;
+		}
 
 		m_renderDone = true;
 

@@ -8,10 +8,14 @@ configure_file(${CMAKE_CURRENT_SOURCE_DIR}/buildconfig.h.in ${CMAKE_CURRENT_SOUR
 add_library(synthLib STATIC)
 
 set(SOURCES
+	midi/songReset.h midi/songReset.cpp
+	midi/midiFile.h midi/smfReader.cpp midi/rcpDecoder.cpp midi/rcpInternal.h midi/rcpTrack.cpp midi/rcpTempo.cpp
+	analog/analogFilter.cpp analog/analogFilter.h
 	audiobuffer.cpp audiobuffer.h
 	audioTypes.h
 	buildconfig.h buildconfig.h.in
 	dac.cpp dac.h
+	dcFilter.h
 	device.cpp device.h
 	deviceException.cpp deviceException.h
 	deviceTypes.h
@@ -39,6 +43,11 @@ set(SOURCES
 )
 
 target_sources(synthLib PRIVATE ${SOURCES})
+if(MSVC)
+	set_source_files_properties(midi/rcpTempo.cpp PROPERTIES COMPILE_OPTIONS /fp:precise)
+else()
+	set_source_files_properties(midi/rcpTempo.cpp PROPERTIES COMPILE_OPTIONS -fno-finite-math-only)
+endif()
 source_group("source" FILES ${SOURCES})
 
 target_link_libraries(synthLib PUBLIC resample dsp56kBase baseLib)
@@ -58,6 +67,11 @@ set_property(TARGET synthLib PROPERTY FOLDER "Gearmulator")
 target_include_directories(synthLib PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/..)
 
 if(BUILD_TESTING)
+	add_executable(dcFilter_test dcFilter_test.cpp)
+	target_link_libraries(dcFilter_test PRIVATE synthLib)
+	set_property(TARGET dcFilter_test PROPERTY FOLDER "Tests")
+	add_test(NAME dcFilter COMMAND dcFilter_test)
+
 	add_executable(dynamicSamplerate_test dynamicSamplerate_test.cpp)
 	target_link_libraries(dynamicSamplerate_test PRIVATE synthLib)
 	set_property(TARGET dynamicSamplerate_test PROPERTY FOLDER "Tests")
@@ -72,4 +86,15 @@ if(BUILD_TESTING)
 	target_link_libraries(device_test PRIVATE synthLib)
 	set_property(TARGET device_test PROPERTY FOLDER "Tests")
 	add_test(NAME device COMMAND device_test)
+endif()
+
+if(BUILD_TESTING)
+	add_executable(stereoPeakLimiter_test stereoPeakLimiter_test.cpp)
+	target_link_libraries(stereoPeakLimiter_test PRIVATE synthLib)
+	add_test(NAME stereoPeakLimiter COMMAND stereoPeakLimiter_test)
+	if(MSVC)
+		target_compile_options(stereoPeakLimiter_test PRIVATE /fp:precise)
+	else()
+		target_compile_options(stereoPeakLimiter_test PRIVATE -fno-finite-math-only)
+	endif()
 endif()

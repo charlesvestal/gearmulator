@@ -1,12 +1,14 @@
 #include "import.h"
 
+#include <array>
+
 #include "config.h"
 
 #include "baseLib/filesystem.h"
 
 #include "networkLib/logging.h"
 
-#include "synthLib/deviceException.h"
+#include "synthLib/device.h"
 #include "synthLib/os.h"
 
 #ifdef _WIN32
@@ -66,21 +68,33 @@ namespace bridgeServer
 		it = m_loadedPlugins.find(_desc);
 		if(it == m_loadedPlugins.end())
 		{
-			_error = "The server has no " + describe(_desc) + ". Copy that exact version of the plugin, or its server plugin, into the server's plugins folder:\n" + m_config.pluginsPath;
+			_error = "The server has no " + describe(_desc) + ". Copy that exact version of the plugin, or its server plugin, into the server's plugins folder:\n" + m_config.pluginsPath +
+				"\nIt has to use bridge protocol " + std::to_string(bridgeLib::g_protocolVersion) + ", the one of this server.";
 			LOGNET(networkLib::LogLevel::Warning, _error);
 			return nullptr;	// still not found
 		}
 
-		try
+		std::array<char, 1024> error{};
+		auto* device = it->second.funcCreate(_params, error.data(), error.size());
+
+		if(!device)
 		{
-			return it->second.funcCreate(_params);
-		}
-		catch(synthLib::DeviceException& e)
-		{
-			_error = "Creating the device of " + describe(_desc) + " failed: " + e.what();
-			LOGNET(networkLib::LogLevel::Error, _error << ", code " << static_cast<uint32_t>(e.errorCode()));
+			_error = "Creating the device of " + describe(_desc) + " failed: " + error.data();
+			LOGNET(networkLib::LogLevel::Error, _error);
 			return nullptr;
 		}
+
+		// A device can be constructed and still be unusable, for example when its firmware did not finish booting.
+		// Processing it could hang this connection, so report it like any other failure.
+		if(!device->isValid())
+		{
+			it->second.funcDestroy(device);
+			_error = "Creating the device of " + describe(_desc) + " failed: the device did not initialize, for example because its firmware did not finish booting";
+			LOGNET(networkLib::LogLevel::Error, _error);
+			return nullptr;
+		}
+
+		return device;
 	}
 
 	bool Import::destroyDevice(const bridgeLib::PluginDesc& _desc, synthLib::Device* _device)
@@ -157,6 +171,20 @@ namespace bridgeServer
 		if(!plugin.handle)
 			return;
 
+		// The other exports pass C++ types, which are only safe to share with a plugin that uses our protocol version.
+		// Any plugin version that does can be hosted. Plugins built before the protocol version was exported do not have it.
+		const auto funcProtocolVersion = reinterpret_cast<FuncBridgeProtocolVersion>(dlsym(plugin.handle, "bridgeProtocolVersion")); // NOLINT(clang-diagnostic-cast-function-type-strict)
+
+		if(!funcProtocolVersion || funcProtocolVersion() != bridgeLib::g_protocolVersion)
+		{
+			if(funcProtocolVersion)
+				LOGNET(networkLib::LogLevel::Warning, "Skipping " << _file << ", it uses bridge protocol " << funcProtocolVersion() << " but this server uses " << bridgeLib::g_protocolVersion);
+			else if(dlsym(plugin.handle, "bridgeDeviceCreate"))	// stay quiet about libraries that are no bridge plugins at all
+				LOGNET(networkLib::LogLevel::Warning, "Skipping " << _file << ", it was built before bridge plugins reported their protocol version and cannot run on this server");
+			dlclose(plugin.handle);
+			return;
+		}
+
 		plugin.funcCreate = reinterpret_cast<FuncBridgeDeviceCreate>(dlsym(plugin.handle, "bridgeDeviceCreate")); // NOLINT(clang-diagnostic-cast-function-type-strict)
 		plugin.funcDestroy = reinterpret_cast<FuncBridgeDeviceDestroy>(dlsym(plugin.handle, "bridgeDeviceDestroy")); // NOLINT(clang-diagnostic-cast-function-type-strict)
 		plugin.funcGetDesc = reinterpret_cast<FuncBridgeDeviceGetDesc>(dlsym(plugin.handle, "bridgeDeviceGetDesc")); // NOLINT(clang-diagnostic-cast-function-type-strict)
@@ -167,8 +195,14 @@ namespace bridgeServer
 			return;
 		}
 
+		const char* pluginName = nullptr;
+		const char* plugin4CC = nullptr;
 		bridgeLib::PluginDesc desc;
-		plugin.funcGetDesc(desc);
+		plugin.funcGetDesc(pluginName, plugin4CC, desc.pluginVersion);
+
+		// copied here, so the strings are allocated on our heap
+		desc.pluginName = pluginName ? pluginName : "";
+		desc.plugin4CC = plugin4CC ? plugin4CC : "";
 
 		if(desc.plugin4CC.empty() || desc.pluginName.empty() || desc.pluginVersion == 0)
 		{

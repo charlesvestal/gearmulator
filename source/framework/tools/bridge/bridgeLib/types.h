@@ -9,7 +9,11 @@ namespace bridgeLib
 	static constexpr uint32_t g_udpServerPort   = 56303;
 	static constexpr uint32_t g_tcpServerPort   = 56362;
 
-	static constexpr uint32_t g_protocolVersion = 1'00'03;
+	// Clients and the server only talk to each other if this matches, and the server only loads plugins built with the
+	// same value, whatever their plugin version. Bump it whenever the network protocol changes, and whenever anything
+	// the server passes to a plugin library changes its binary layout: synthLib::Device and its virtual functions,
+	// synthLib::DeviceCreateParams, SMidiEvent, the audio types, bridgeLib::PluginDesc and the bridge* exports.
+	static constexpr uint32_t g_protocolVersion = 1'00'04;
 
 	using SessionId = uint64_t;
 

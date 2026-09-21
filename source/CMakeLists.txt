@@ -100,6 +100,7 @@ endif()
 if(${CMAKE_PROJECT_NAME}_SYNTH_88EMU)
 	add_subdirectory(cpu/common)
 	add_subdirectory(cpu/h8500)
+	add_subdirectory(cpu/mcs96)
 	add_subdirectory(cpu/sh2)
 endif()
 add_subdirectory(cpu/h8s)
@@ -173,13 +174,20 @@ endif()
 # (portmidi-static vs. portmidi) so they coexist when both Vavra and the SC-88 are on.
 # portmidi does not build for iOS: porttime/ptmacosx_mach.c includes
 # CoreAudio/HostTime.h, which the iOS SDK does not ship. An AUv3 takes its MIDI
-# from the host, so the bridge is stubbed there instead (Emu88PortMidiBridge).
+# from the host, so juceMidiPorts is built from a stub there instead
+# (jucePlayerLib/portMidiBridgeStub.cpp).
 if(${CMAKE_PROJECT_NAME}_SYNTH_88EMU AND NOT ANDROID AND NOT IOS AND NOT TARGET portmidi)
 	# Build static even if a parent set BUILD_SHARED_LIBS ON.
 	set(_pm_prev_shared ${BUILD_SHARED_LIBS})
 	set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
 	add_subdirectory(3rdparty/portmidi-latest EXCLUDE_FROM_ALL)
 	set(BUILD_SHARED_LIBS ${_pm_prev_shared} CACHE BOOL "" FORCE)
+endif()
+
+# Only 88emu uses the player library, so it is built along with it, tests included. Excluded from
+# ALL, its tests were registered with ctest but never built.
+if(${CMAKE_PROJECT_NAME}_SYNTH_88EMU AND ${CMAKE_PROJECT_NAME}_BUILD_JUCEPLUGIN)
+	add_subdirectory(framework/juce/jucePlayerLib)
 endif()
 
 # ----------------- Synth Xenia

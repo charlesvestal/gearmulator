@@ -103,9 +103,15 @@ void EditorWindow::resized()
 	if (auto* root = m_state.getUiRoot())
 		root->setTopLeftPosition((w - fitW) / 2, (h - fitH) / 2);
 
-	const auto percent = 100.f * scale / m_state.getRootScale();
-	m_config.setValue("scale", percent);
-	m_config.saveIfNeeded();
+	// Any size that is too small ends up at the minimum, and hosts, window managers and display changes ask for those
+	// without the user doing anything. A size at the minimum therefore says nothing about the scale the user wants,
+	// and remembering it opened every later window at the minimum.
+	if (!isMinimumSize(w, h))
+	{
+		const auto percent = 100.f * scale / m_state.getRootScale();
+		m_config.setValue("scale", percent);
+		m_config.saveIfNeeded();
+	}
 
 	// Prettymuch unbelievable Juce VST3 bug, but our root component is a child of the VST3 editor component
 	// and that one is not resized! The host window is, the first child (our editor component) is, but the
@@ -154,10 +160,10 @@ void EditorWindow::setGuiScale(const float _percent)
 	if(!m_state.getWidth() || !m_state.getHeight())
 		return;
 
-	const auto s = _percent / 100.0f * m_state.getRootScale();
+	const auto size = getSizeForScale(_percent);
 
-	auto w = static_cast<int>(static_cast<float>(m_state.getWidth()) * s);
-	auto h = static_cast<int>(static_cast<float>(m_state.getHeight()) * s);
+	auto w = size.x;
+	auto h = size.y;
 
 #if JUCE_IOS
 	/* Never ask for more room than exists. On the desktop an oversized editor just
@@ -197,6 +203,19 @@ void EditorWindow::setGuiScale(const float _percent)
 	m_config.saveIfNeeded();
 }
 
+juce::Point<int> EditorWindow::getSizeForScale(const float _percent) const
+{
+	const auto s = _percent / 100.0f * m_state.getRootScale();
+
+	return { static_cast<int>(static_cast<float>(m_state.getWidth()) * s),
+		static_cast<int>(static_cast<float>(m_state.getHeight()) * s) };
+}
+
+bool EditorWindow::isMinimumSize(const int _width, const int _height) const
+{
+	return _width <= m_sizeConstrainer.getMinimumWidth() || _height <= m_sizeConstrainer.getMinimumHeight();
+}
+
 void EditorWindow::setUiRoot(juce::Component* _component)
 {
 	removeAllChildren();
@@ -214,7 +233,11 @@ void EditorWindow::setUiRoot(juce::Component* _component)
 
 	m_sizeConstrainer.setFixedAspectRatio(static_cast<double>(m_state.getWidth()) / static_cast<double>(m_state.getHeight()));
 	
-    const auto scale = static_cast<float>(m_config.getDoubleValue("scale", 100));
+	// versions before this one did save the minimum, and a config that holds it would keep every window at the minimum
+	auto scale = static_cast<float>(m_config.getDoubleValue("scale", 100));
+	const auto size = getSizeForScale(scale);
+	if (isMinimumSize(size.x, size.y))
+		scale = 100.0f;
 	setGuiScale(scale);
 
 	_component->setSize(getWidth(), getHeight());

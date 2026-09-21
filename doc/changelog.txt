@@ -1,5 +1,280 @@
 Release Notes
 
+2.2.25:
+
+88emuPlayer:
+
+- [Fix] MIDI Player: Loading a MIDI file whose SysEx or Meta event is cut short
+        by the end of the file, or by a track chunk that is shorter than its
+        contents, no longer reads past the data or terminates the player.
+
+- [Fix] ROMs: Make the VEGS-Pro support the SC-88Pro waveroms as well.
+
+2.2.24:
+
+Framework:
+
+- [Fix] The patch manager could hang the interface for minutes on folders
+        with tens of thousands of patch files.
+
+- [Fix] DSPBridge: The server took the port of its UDP connection from the
+        TCP port setting.
+
+- [Fix] DSPBridge: When a device did not start on the server, the connection
+        hung. The server now refuses the device instead.
+
+Osirus:
+
+- [Imp] The part list now shows per-part MIDI activity indicators, same as
+        OsTIrus.
+
+88emuPlayer:
+
+- [Fix] MIDI: Deliver System DT1 messages to the SC-88, SC-88VL and SC-88Pro
+        firmware, restoring per-part `CHANNEL MSG RX PORT` assignments and
+        System Mode Set. Individual parts can layer from the same MIDI input.
+
+2.2.23:
+
+88emuPlayer:
+
+- [New] MIDI Player: The standalone now restores the last playlist automatically.
+        Right-click the playlist to load or save portable `.m3u` / `.m3u8`
+        playlist files, or add/drop one to append its entries.
+
+- [Fix] MIDI Player: Prevent shortened opening notes in songs with dense
+        initial instrument setup. Send safe opening setup ahead of playback
+        and let cleanup finish even when the per-song reset is off.
+
+- [Fix] MIDI Player: Recomposer RCP Track Exclusive messages now read their
+        SysEx payload from F7 continuation records, so SC-88Pro setup data is
+        no longer prefixed with invalid bytes and discarded.
+
+- [Imp] MIDI: Command-line MIDI input options can now assign inputs to
+        groups A-D with `--midi-in-a` through `--midi-in-d`. `--midi-in`
+        remains the group-A shorthand.
+
+- [Imp] UI: The CM-32P PCM card image can be chosen in the settings and is
+        remembered, instead of only through the --pcm-card launch option.
+
+- [Fix] Devices: The front-panel POWER switch and Q shortcut now use standby
+        on the SC-55, SC-55mkII, SC-155, SC-155mkII and SC-88VL.
+
+- [New] Devices: Added experimental support for NU-10B and MIIG5 (GM mode only).
+
+2.2.22:
+
+88emuPlayer:
+
+- [Imp] UI: The Settings panel has now a more readable font size.
+
+- [Fix] UI: Restore the standard window border color.
+
+- [Fix] UI: Correct the SC-88Pro USER INST / EFX indicator to display green,
+        red or amber according to the front-panel LED controls.
+
+- [Imp] Devices: The PWM-controlled VCA in the CM-32P is now modelled.
+
+- [Fix] Devices: LP chip emulation was using a wrong scaling factor that was
+        affecting the total output volume.
+
+- [Fix] Audio: Avoid waiting for the user interface when processing front-panel
+        input and updating the display from the audio thread.
+
+- [Fix] MIDI: Preserve outgoing MIDI timing within audio blocks, including when
+        analog output emulation uses oversampling.
+
+- [Fix] MIDI Player: Clear sustained and releasing notes on transport changes
+        even after an All Notes Off message.
+
+- [Fix] MIDI Player: Wait longer after the per-song reset before starting the
+        song. The previous pause was shorter than the reset itself takes to
+        reach the device, so songs that set up every part on their first tick
+        lost the notes at their start.
+
+- [Fix] macOS: Restore software rendering when Metal initialization fails,
+        removing the native Metal view that could leave the window black.
+
+- [Fix] macOS: Support GPUs requiring 4x instead of 2x Metal antialiasing and
+        correct Metal texture transfers and unsupported OpenGL calls.
+
+- [Fix] macOS: Release Metal resources when closing or recreating the interface
+        to prevent graphics memory usage from growing.
+
+- [Imp] ROMs: Added support for the SC-88Pro correct wave set as 5 separate chips.
+
+2.2.21:
+
+Framework:
+
+- [Fix] BUG-10355 After switching to another ROM, the patch manager could keep
+        offering the presets of the previous ROM, taken from its cache, instead
+        of the ones of the ROM that is loaded. Tags, favourites, renames and
+        MIDI bank numbers of ROM presets and banks are kept.
+
+- [Fix] BUG-10323 Plugin windows could open at their smallest possible size
+        and stay that small every time they were opened again. When a host,
+        the window manager or a display change asked for a smaller window
+        than that, the result was remembered as the chosen scale. It no
+        longer is, and a window that was saved that small opens at 100%.
+
+- [Imp] BUG-10322 The skin canvas supports more of the HTML5 2D drawing
+        context: linear and radial gradients (createLinearGradient,
+        createRadialGradient, addColorStop), clip, clearRect, lineJoin,
+        lineCap and ctx.canvas, the canvas element being drawn, whose
+        client_width and client_height give its size in pixels. strokeRect
+        now centres its outline on the rectangle, as HTML5 does.
+
+- [Imp] DSPBridge: The server is no longer limited to plugins of its own
+        version. It can host any plugin version that uses the same bridge
+        protocol, so new plugin versions can be copied into the server's
+        plugins folder next to the old ones without reinstalling the server.
+        A client still gets the exact plugin version it asks for.
+
+- [Fix] DSPBridge: On Windows, the server could corrupt memory and crash
+        when a device sent a lot of MIDI at once or had a large state.
+        Plugins and server have to be updated together for this, older
+        plugins are not loaded by the new server.
+
+88emuPlayer:
+
+- [New] Added comprehensive README, shipped with the binaries.
+
+- [New] Added `88EmuCli` for rendering MIDI files offline.
+
+- [New] Added standalone cli params for scripting and advanced options.
+
+- [Imp] Performance: Removed the additional emulation-worker buffering from
+        playback and live MIDI for performance. The player now renders the board
+        synchronously.
+
+- [New] Devices: Added support for the original SC-55, SC-155, SC-155mkII,
+        SCC-1A and SCB-55.
+
+- [New] Devices: Added the XPGS / G-800 sound engine.
+
+- [New] Devices: Added VE-GS Pro as a separate device.
+
+- [New] Devices: Added experimental SC-8820 emulation.
+
+- [New] Devices: Added experimental CM-32P emulation.
+
+- [New] Devices: Added emulated power on/off button using the Q shortcut.
+
+- [New] Devices: Added “Factory Reset on load” and “Fast Boot (skip intro)”
+        settings.
+
+- [Fix] Devices: Firmware that ran past the end of a 64 KB code page crashed the
+        player, for example a program ROM booted with the wrong MCU ROM. The
+        program counter now wraps to the start of the same page, as on the real
+        CPU.
+
+- [New] MIDI Player: Added Recomposer RCP/R36 (V2) and G36 (V3) playback support
+        (thanks to masanaohayashi and shingo45endo).
+
+- [New] MIDI Player: Added a configurable GM/GS/MT32 reset before each song.
+
+- [New] MIDI Player: Added a configurable pause between automatically advancing
+        songs.
+
+- [Fix] MIDI Player: Starting another song now clears channel controllers and
+        pitch bend, including when the per-song reset is Off, preventing the
+        previous song's pitch bend from leaving instruments out of tune.
+        Transport changes also invalidate file events still waiting in the
+        player/engine queues.
+
+- [Fix] MIDI Player: MIDI files with non-ASCII filenames can be opened through
+        the Unicode-aware filesystem path, including on Windows.
+
+- [New] Audio: Added selectable left and right hardware output channels,
+        remembered separately for each audio backend and device.
+
+- [New] Audio: Added “Use system device” for CoreAudio and Windows Audio
+        (WASAPI), enabled by default for configurations without an explicit
+        output choice.
+
+- [New] Audio: Added an optional stereo-linked output limiter after the volume
+        control, protecting playback and WAV recording when gain is increased.
+
+- [New] Audio: Added optional analog output emulation, including DAC word
+        precision and modeled output filtering. Select Off, Auto for the current
+        device, or a specific circuit: CM-32P, SC-55, SC-55mkII, SCC-1, G-800,
+        SC-88, SC-88VL, SC-88Pro, SC-8820 or SC-8850. Off remains the default.
+
+- [New] MIDI: Each MIDI input can now play one or more independently selected
+        part groups A–D, with assignments saved in MIDI settings. Available
+        groups depend on the selected device.
+
+- [Imp] MIDI: Expanded virtual MIDI inputs and outputs from A/B to A–D on
+        supported platforms, exposing all four SC-8850 groups. Device output
+        retains its original group, and launch options can customize the
+        port-name prefix.
+
+- [Fix] MIDI: Implemented the SC-88/SC-88Pro firmware's MIDI output path,
+        allowing messages such as front-panel bulk dumps to reach the selected
+        MIDI output.
+
+- [Fix] MIDI: Forwarded the Yamaha SysEx messages needed to activate the
+        SC-88Pro firmware's XG compatibility mode. This exposes the firmware's
+        existing compatibility behavior; it does not add full Yamaha XG
+        emulation.
+
+- [Fix] MIDI: Paced SC-55mkII MIDI bursts to avoid overflowing the emulated
+        controller's input buffer when many events arrive together.
+
+- [New] ROMs: Added custom ROM loading by conventional filename and exact size,
+        taking precedence over hash-based discovery. Known images still work
+        under arbitrary filenames. Unrecognized or modified content produces a
+        warning, with an option to suppress custom-ROM warnings.
+
+- [New] ROMs: Unavailable devices in the device menu now open a ROM requirements
+        dialog showing accepted filenames, sizes, hashes, missing components and
+        compatible alternatives. The details can be copied, and the ROM folder
+        can be opened directly.
+
+- [Imp] ROMs: SC-8850 wave ROMs can now be supplied as two distinct 16 MiB
+        banks, including recognized raw XP dump layouts, in addition to the
+        existing combined decoded image.
+
+- [Imp] ROMs: Recognized the SC-55mkII GS-28 2.00 image pre-patched with
+        shingo45endo's capital-tone-fallback patcher using its default SC-55
+        tone and v1 drum options. The player loads the patched image; it does
+        not apply the patch itself.
+
+- [Imp] ROMs: Limited automatic ROM searches to the player's data folder and its
+        subfolders, avoiding unrelated legacy/product locations. `--rom-dir`
+        selects an exclusive alternative folder. ROMs previously found only in
+        older search locations must be moved or selected through this option.
+
+- [Imp] ROMs: Optimized wave-ROM descrambling and compatible Pro-wave conversion
+        during loading (thanks to hackyourlife).
+
+- [Imp] UI: Reorganized the device menu to keep related models together.
+
+- [Imp] UI: Device and context menus now open in separate scrolling popup
+        windows, avoiding clipping at the edge of the player.
+
+- [Imp] UI: Added system-font fallbacks for names containing characters absent
+        from the bundled font, including CJK text, and normalized decomposed
+        macOS filenames for display.
+
+- [Fix] UI: The SC-8850 SHIFT, DEC and INC keyboard shortcuts now reach the
+        corresponding panel controls, including shifted minus/plus keys.
+
+- [Fix] UI: Mouse-wheel input on endless knobs now wraps instead of stopping at
+        the ends of the range, including the SC-8850 value encoder.
+
+- [Fix] UI: Clicking an open drop-down's control to dismiss its popup no longer
+        immediately reopens it.
+
+- [Fix] UI: On macOS, opening a temporary popup no longer hides the close button
+        of windows without minimize/maximize controls.
+
+Vavra:
+
+- [Fix] Saving a sound limited some FX2 values to 29: the Speed of Chorus,
+        Flanger, Phaser and Five FX, the Size of Reverb and the Delay time of
+        the 5.1 Delay.
 
 2.2.20:
 
@@ -51,6 +326,15 @@ Framework:
 - [Fix] SysEx from a host that frames it twice lost its start byte instead of
         the surplus end byte, leaving a headless message behind.
 
+- [Fix] BUG-10332 BUG-10337 The software renderer drew garbage and could crash
+        the plugin with a skin that tiles an image across an area: it read
+        past the end of the image instead of repeating it.
+
+- [Fix] The DSP Bridge server kept a device that could not be initialized,
+        for example because its firmware did not finish booting, and the
+        connection to it hung. The plugin now shows why the device could not
+        be created.
+
 - [Fix] On macOS, the packages of the standalone effect plugins never
         contained the script that removes the quarantine flag.
 
@@ -62,6 +346,15 @@ Vavra/Xenia:
         its content matched all of them. Tags, favourites and renames saved
         before are kept. Once they are saved again by this version, older
         versions no longer show them.
+
+Vavra:
+
+- [Fix] The FM source lists of the oscillators and filters had no entries for
+        the external input, so every choice after Noise landed three places
+        further down: LFO 1 selected the left external input, Filter Env
+        selected LFO 1, and the amp envelope, envelope 3 and envelope 4 could
+        not be reached at all. Existing sounds are unaffected, they now show
+        the source they actually use.
 
 Xenia:
 

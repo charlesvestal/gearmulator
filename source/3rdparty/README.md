@@ -19,7 +19,7 @@ an identifier while rewriting only `path`. Renaming them would require moving
 
 | Directory | Upstream | Our fork | What we changed |
 |---|---|---|---|
-| `JUCE` | juce-framework/JUCE | dsp56300/JUCE | VST3 program-change → MIDI CC parameter emulation (EMU-59) and `IParameterFinder` support; X11 unconsumed-key forwarding; `getComponentAt` made virtual; removal of the synthetic mouse-move events; Linux kdialog directory multi-select; Android CMake patch; Sonoma build fix |
+| `JUCE` | juce-framework/JUCE | dsp56300/JUCE | VST3 program-change → MIDI CC parameter emulation (EMU-59) and `IParameterFinder` support; X11 unconsumed-key forwarding; `getComponentAt` made virtual; removal of the synthetic mouse-move events; Linux kdialog directory multi-select; Android CMake patch; Sonoma build fix; macOS: popup menus and other temporary modal windows no longer strip the title bar buttons of other windows |
 | `RmlUi` | mikke89/RmlUi | dsp56300/RmlUi | Multi-instance `CoreInstance` adaptation across the Lua and SVG plugins, plus the sandboxed Lua scripting work (EMU-70): restricted standard library, per-instance error logging, script execution timeout. Also visibility-event dispatch fixes |
 | `clap-juce-extensions` | free-audio/clap-juce-extensions | dsp56300/clap-juce-extensions | Windows text-field keyboard input fix (BUG-10159) and a `JUCE_VERSION` guard around `WindowsHooks` |
 | `cpp-terminal` | jupyter-xeus/cpp-terminal | dsp56300/cpp-terminal | Portability only: Windows ARM and Raspberry Pi arm64 compile fixes, one missing include |
@@ -42,7 +42,7 @@ None of them is under active upstream tracking.
 
 | Directory | Project | Notes |
 |---|---|---|
-| `fst` | FST — Free Studio Technology | Clean-room VST2 plugin headers. Used as the VST2 SDK fallback when the real SDK is not available, see `source/cmake/findvst2.cmake`. **Patched:** `fstSpeakerArrangement_::speakers` is `[8]`, not a flexible array — see the comment on it in `fst/fst.h` |
+| `fst` | FST — Free Studio Technology | Clean-room VST2 plugin headers. Used as the VST2 SDK fallback when the real SDK is not available, see `source/cmake/findvst2.cmake`. **Patched** to the struct sizes of the real SDK: `fstSpeakerArrangement_::speakers` is `[8]` and `fstEvents_::events` is `[2]`, not flexible arrays, and `fstEvent_`, `fstPinProperties_` and `_fstEffect` carry their reserved tails — see the `LOCAL PATCH` comments in `fst/fst.h` |
 | `libresample` | libresample (Dominic Mazzoni, after Julius Smith's resample) | Autotools upstream; our CMake build and `resample_clear_history` API for prepared sample-rate switches |
 | `portaudio` | PortAudio | Used by the Vavra test console only |
 | `portmidi` | PortMidi (Roger B. Dannenberg) | Old release. A clone of current upstream exists as `portmidi-latest` on some branches |
