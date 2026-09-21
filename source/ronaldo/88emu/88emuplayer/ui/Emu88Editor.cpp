@@ -112,13 +112,41 @@ namespace emu88Player
 
 	void Editor::resized()
 	{
-		if(m_rml)
+		const auto w = getWidth();
+		const auto h = getHeight();
+
+		/* Fit the panel INSIDE the space we were given and centre it, rather than
+		 * handing RmlComponent the raw bounds. It derives its render scale from the
+		 * WIDTH alone (size.x / documentSize.x), so a rectangle of the wrong aspect
+		 * scales the document by width and then clips whatever does not fit in
+		 * height. On the desktop the constrainer holds the aspect ratio, so fitW/fitH
+		 * come back as w/h and this changes nothing; a host that dictates our bounds
+		 * -- every iOS AUv3 -- hands us an arbitrary rectangle instead.
+		 *
+		 * Same fix as EditorWindow::resized() in jucePluginEditorLib; this editor does
+		 * not go through that class and so did not inherit it. */
+		if(m_rml && w > 0 && h > 0)
+		{
+			const auto scale = std::min(static_cast<double>(w) / g_defaultWidth,
+			                            static_cast<double>(h) / g_defaultHeight);
+			const auto fitW = static_cast<int>(g_defaultWidth  * scale);
+			const auto fitH = static_cast<int>(g_defaultHeight * scale);
+			m_rml->setBounds((w - fitW) / 2, (h - fitH) / 2, fitW, fitH);
+		}
+		else if(m_rml)
+		{
 			m_rml->setBounds(getLocalBounds());
-		if(m_settingGuiScale || getWidth() <= 0)
+		}
+
+		if(m_settingGuiScale || w <= 0)
 			return;
-		const auto scale = juce::roundToInt(100.0 * static_cast<double>(getWidth()) / g_defaultWidth);
+#if !JUCE_IOS
+		// Our bounds are the host's choice there, not the user's, so they say nothing
+		// about the scale wanted. The GUI Scale menu still records what it sets.
+		const auto scale = juce::roundToInt(100.0 * static_cast<double>(w) / g_defaultWidth);
 		m_processor.config().setValue("scale", scale);
 		m_processor.config().saveIfNeeded();
+#endif
 	}
 
 	void Editor::openContextMenu(Rml::Event& _event)

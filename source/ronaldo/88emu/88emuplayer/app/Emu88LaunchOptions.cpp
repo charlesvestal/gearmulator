@@ -9,6 +9,7 @@
 #include "88lib/hardwareDevice.h"
 #include "88lib/rom/romloader.h"
 #include "baseLib/filesystem.h"
+#include "synthLib/os.h"
 #include "synthLib/romLoader.h"
 
 namespace emu88Player
@@ -51,6 +52,16 @@ namespace emu88Player
         // Suspects" hashed every other product's ROMs too - seconds before the window appeared.
         const auto folder = launchFile(options.has("rom-dir") ? options.get("rom-dir") : defaultDataFolder());
         synthLib::RomLoader::setSearchPath(folder.getFullPathName().toStdString());
+#if JUCE_IOS
+        /* setSearchPath REPLACES the module directory, and on iOS that is the app
+         * bundle -- where the ROMs a build shipped with actually live, since there is
+         * no install step that could put them anywhere else. Put it back.
+         *
+         * The reason the default set is dropped does not apply to it: the bundle root
+         * holds only what was deliberately put there, so nothing else of ROM size is
+         * waiting to be hashed. Flat, not recursive, for the same reason. */
+        synthLib::RomLoader::addSearchPath(synthLib::getModulePath(false), false);
+#endif
     }
 
     const char* deviceId(const emu88Lib::DeviceModel model)

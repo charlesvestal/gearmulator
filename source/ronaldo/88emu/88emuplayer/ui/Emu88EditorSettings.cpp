@@ -28,7 +28,42 @@ namespace emu88Player
     void Editor::setGuiScale(const int _percent)
     {
         m_settingGuiScale = true;
-        setSize(g_defaultWidth * _percent / 100, g_defaultHeight * _percent / 100);
+
+        auto w = g_defaultWidth * _percent / 100;
+        auto h = g_defaultHeight * _percent / 100;
+
+#if JUCE_IOS
+        /* Never ask for more room than exists. On the desktop an oversized editor just
+         * makes a bigger window; in an iOS AUv3 the view is clipped to what the host
+         * gives us, and resized() then sees OUR inflated bounds rather than the host's,
+         * so its fit-to-size maths computes a scale of ~1 and does nothing.
+         *
+         * Cap against the parent if we are already in the hierarchy, otherwise against
+         * the display, which is the upper bound for any host view. */
+        juce::Rectangle<int> avail;
+
+        if (const auto* parent = getParentComponent())
+            avail = parent->getLocalBounds();
+
+        if (avail.isEmpty())
+        {
+            if (const auto* display = juce::Desktop::getInstance().getDisplays().getPrimaryDisplay())
+                avail = display->userArea;
+        }
+
+        if (!avail.isEmpty() && w > 0 && h > 0)
+        {
+            const auto fit = std::min(static_cast<float>(avail.getWidth())  / static_cast<float>(w),
+                                      static_cast<float>(avail.getHeight()) / static_cast<float>(h));
+            if (fit < 1.0f)
+            {
+                w = static_cast<int>(static_cast<float>(w) * fit);
+                h = static_cast<int>(static_cast<float>(h) * fit);
+            }
+        }
+#endif
+
+        setSize(w, h);
         m_settingGuiScale = false;
         m_processor.config().setValue("scale", _percent);
         m_processor.config().saveIfNeeded();
