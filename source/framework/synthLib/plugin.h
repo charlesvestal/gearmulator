@@ -46,6 +46,11 @@ namespace synthLib
 
 		void setDevice(Device* _device);
 
+		// Remembered, because the host may set it before a device exists and a device
+		// swap (a ROM change, a failed device replaced) must not lose it.
+		void setNonRealtime(bool _nonRealtime);
+		bool isNonRealtime() const { return m_nonRealtime; }
+
 #if !SYNTHLIB_DEMO_MODE
 		bool getState(std::vector<uint8_t>& _state, StateType _type) const;
 		bool setState(const std::vector<uint8_t>& _state) const;
@@ -97,6 +102,7 @@ namespace synthLib
 		mutable std::mutex m_lockAddMidiEvent;
 
 		Device* m_device;
+		bool m_nonRealtime = false;
 
 		std::vector<float> m_dummyBuffer;
 

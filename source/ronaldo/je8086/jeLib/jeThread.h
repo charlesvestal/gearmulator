@@ -26,6 +26,13 @@ namespace jeLib
 
 		auto& getSampleBuffer() { return m_audioOut; }
 
+		/* Offline render: no deadline, and the caller is not a realtime thread, so
+		 * both of the "never block the host" mechanisms below are turned off. The
+		 * backlog is not dropped and the push waits for room, which is what makes
+		 * every sample the host asked for actually get rendered. */
+		void setNonRealtime(const bool _nonRealtime) { m_nonRealtime.store(_nonRealtime, std::memory_order_relaxed); }
+		bool isNonRealtime() const { return m_nonRealtime.load(std::memory_order_relaxed); }
+
 		/* Diagnostics: "the runway was spent and never rebuilt" and "the engine is
 		 * behind and the jobs are piling up" both look like an empty ring from the
 		 * audio thread, and they need opposite fixes. These tell them apart. */
@@ -81,6 +88,7 @@ namespace jeLib
 		 * Large enough that ordinary jitter is absorbed, small enough that a
 		 * recovery costs a single discontinuity rather than seconds of lag. */
 		uint32_t m_maxCarrySamples = 4096;
+		std::atomic<bool> m_nonRealtime{false};
 		uint64_t m_droppedSamples = 0;
 
 		std::vector<ProcessJob> m_jobPool;

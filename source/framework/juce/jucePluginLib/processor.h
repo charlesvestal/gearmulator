@@ -79,6 +79,11 @@ namespace pluginLib
 
 		synthLib::Plugin& getPlugin();
 
+		/* The host telling us it is rendering offline -- a bounce, or a DAW freezing
+		 * a track. Recorded here rather than forwarded blind, because this can arrive
+		 * before the device exists and getPlugin() would boot one to answer it. */
+		void setNonRealtime(bool _nonRealtime) noexcept override;
+
 		ProgramChangeRouter& getProgramChangeRouter() { return m_programChangeRouter; }
 
 		virtual synthLib::Device* createDevice() = 0;

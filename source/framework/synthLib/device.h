@@ -113,6 +113,20 @@ namespace synthLib
 		 * (DeviceCreateParams::dspThreads) because it fixes the reported latency. */
 		virtual uint32_t getMaxDspThreads() const { return 1; }
 
+		/* Offline rendering: the host is producing audio faster than real time -- a
+		 * bounce, or a DAW freezing a track -- and the caller is NOT a realtime
+		 * thread. Every mechanism that trades audio for meeting a deadline is wrong
+		 * here, because there is no deadline: dropping a backlog or filling an
+		 * underrun with silence just corrupts the render. A device that has such a
+		 * mechanism overrides this and turns it off while the flag is set, so the
+		 * host waits for the engine instead.
+		 *
+		 * Set from AudioProcessor::setNonRealtime(), which can be called before the
+		 * device exists, so Plugin remembers it and applies it to whatever device it
+		 * is given. */
+		virtual void setNonRealtime(const bool _nonRealtime) { m_nonRealtime = _nonRealtime; }
+		bool isNonRealtime() const { return m_nonRealtime; }
+
 		auto& getMidiTranslator() { return m_midiTranslator; }
 
 		// DSPBridge server entry points. The server runs devices created by plugin libraries, and on Windows each of
@@ -129,6 +143,8 @@ namespace synthLib
 		virtual const std::vector<float>& bridgeGetPreferredSamplerates();
 
 	protected:
+		bool m_nonRealtime = false;
+
 		virtual void readMidiOut(std::vector<SMidiEvent>& _midiOut) = 0;
 		virtual void processAudio(const TAudioInputs& _inputs, const TAudioOutputs& _outputs, size_t _samples) = 0;
 		virtual bool sendMidi(const SMidiEvent& _ev, std::vector<SMidiEvent>& _response) = 0;

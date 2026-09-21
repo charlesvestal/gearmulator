@@ -24,6 +24,7 @@ namespace n2x
 		bool setDspClockPercent(uint32_t _percent) override;
 		uint32_t getDspClockPercent() const override;
 		uint64_t getDspClockHz() const override;
+		void setNonRealtime(bool _nonRealtime) override;
 
 	protected:
 		void readMidiOut(std::vector<synthLib::SMidiEvent>& _midiOut) override;

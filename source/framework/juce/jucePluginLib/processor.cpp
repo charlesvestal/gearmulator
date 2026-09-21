@@ -172,6 +172,18 @@ namespace pluginLib
 	    return *m_controller;
 	}
 
+	void Processor::setNonRealtime(const bool _nonRealtime) noexcept
+	{
+		juce::AudioProcessor::setNonRealtime(_nonRealtime);
+
+		// Only if the device is already there. If it is not, getPlugin() applies it
+		// when it creates one, and booting a device from here -- which a host may
+		// call on any thread, at any time -- is not something to do for a flag.
+		const std::lock_guard lock(m_deviceCreateMutex);
+		if(m_plugin)
+			m_plugin->setNonRealtime(_nonRealtime);
+	}
+
 	synthLib::Plugin& Processor::getPlugin()
 	{
 		// Serialize lazy device/plugin creation (see m_deviceCreateMutex). In steady state this is
@@ -240,6 +252,8 @@ namespace pluginLib
 		}));
 
 		m_plugin->setResamplerMode(m_resamplerMode);
+		// The host may have told us it renders offline before there was a device to tell.
+		m_plugin->setNonRealtime(isNonRealtime());
 
 		return *m_plugin;
 	}

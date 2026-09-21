@@ -33,6 +33,7 @@ namespace xt
 		bool sendMidi(const synthLib::SMidiEvent& _ev, std::vector<synthLib::SMidiEvent>& _response) override;
 
 		dsp56k::EsxiClock* getDspEsxiClock() const override;
+		void setNonRealtime(bool _nonRealtime) override;
 	private:
 
 		Xt m_xt;

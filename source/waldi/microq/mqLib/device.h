@@ -34,6 +34,7 @@ namespace mqLib
 		bool sendMidi(const synthLib::SMidiEvent& _ev, std::vector<synthLib::SMidiEvent>& _response) override;
 
 		dsp56k::EsxiClock* getDspEsxiClock() const override;
+		void setNonRealtime(bool _nonRealtime) override;
 
 	private:
 		MicroQ						m_mq;

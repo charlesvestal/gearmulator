@@ -60,6 +60,13 @@ namespace n2x
 		return const_cast<Hardware&>(m_hardware).getDSPA().getPeriph().getEsaiClock().getSpeedInHz();
 	}
 
+	void Device::setNonRealtime(const bool _nonRealtime)
+	{
+		synthLib::Device::setNonRealtime(_nonRealtime);
+		m_hardware.getDSPA().getPeriph().getEsai().setNonRealtime(_nonRealtime);
+		m_hardware.getDSPB().getPeriph().getEsai().setNonRealtime(_nonRealtime);
+	}
+
 	void Device::readMidiOut(std::vector<synthLib::SMidiEvent>& _midiOut)
 	{
 		m_hardware.getMidi().read(m_midiOutBuffer);

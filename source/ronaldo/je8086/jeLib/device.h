@@ -36,6 +36,7 @@ namespace jeLib
 		bool setDspClockPercent(uint32_t _percent) override;
 		uint32_t getDspClockPercent() const override;
 		uint32_t getMaxDspThreads() const override;
+		void setNonRealtime(bool _nonRealtime) override;
 		uint32_t getInternalLatencyInputToOutput() const override;
 		uint64_t getDspClockHz() const override;
 

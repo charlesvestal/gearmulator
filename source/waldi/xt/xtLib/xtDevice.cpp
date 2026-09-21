@@ -138,4 +138,16 @@ namespace xt
 			return nullptr;
 		return &p->getEssiClock();
 	}
+
+	void Device::setNonRealtime(const bool _nonRealtime)
+	{
+		synthLib::Device::setNonRealtime(_nonRealtime);
+
+		auto* hw = m_xt.getHardware();
+		if(!hw)
+			return;
+
+		for(uint32_t i=0; i<hw->getDspCount(); ++i)
+			hw->getDSP(i).getPeriph().getEssi0().setNonRealtime(_nonRealtime);
+	}
 }

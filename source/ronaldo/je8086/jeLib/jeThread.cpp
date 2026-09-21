@@ -108,18 +108,34 @@ namespace jeLib
 			 * NOW: one audible discontinuity, then a clean stream that the next
 			 * good period can refill. MIDI is kept -- dropping note-offs would
 			 * leave the synth stuck on. */
-			if (m_carry.samplesToProcess > m_maxCarrySamples)
+			if (isNonRealtime())
 			{
-				m_droppedSamples += m_carry.samplesToProcess - m_maxCarrySamples;
-				m_carry.samplesToProcess = m_maxCarrySamples;
-			}
-
-			if (!m_pendingJobs.full())
-			{
+				/* Offline: the host is rendering faster than real time, so the engine
+				 * is ALWAYS behind and the two mechanisms above would fire on every
+				 * block -- dropping most of the render and handing the host a stream
+				 * full of discontinuities. That is the freeze-comes-back-distorted
+				 * bug. There is no deadline here and this is not a realtime thread,
+				 * so drop nothing and let push_back() wait for room instead. */
 				m_pendingJobs.push_back(std::move(m_carry));
 				m_carry.samplesToProcess = 0;
 				m_carry.midiEvents.clear();
 				m_hasCarry = false;
+			}
+			else
+			{
+				if (m_carry.samplesToProcess > m_maxCarrySamples)
+				{
+					m_droppedSamples += m_carry.samplesToProcess - m_maxCarrySamples;
+					m_carry.samplesToProcess = m_maxCarrySamples;
+				}
+
+				if (!m_pendingJobs.full())
+				{
+					m_pendingJobs.push_back(std::move(m_carry));
+					m_carry.samplesToProcess = 0;
+					m_carry.midiEvents.clear();
+					m_hasCarry = false;
+				}
 			}
 		}
 

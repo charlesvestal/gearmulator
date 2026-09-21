@@ -155,4 +155,16 @@ namespace mqLib
 			return nullptr;
 		return &p->getEsaiClock();
 	}
+
+	void Device::setNonRealtime(const bool _nonRealtime)
+	{
+		synthLib::Device::setNonRealtime(_nonRealtime);
+
+		auto* hw = m_mq.getHardware();
+		if(!hw)
+			return;
+
+		for(uint32_t i=0; i<hw->getDspCount(); ++i)
+			hw->getDSP(i).getPeriph().getEsai().setNonRealtime(_nonRealtime);
+	}
 }

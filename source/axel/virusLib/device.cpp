@@ -712,6 +712,15 @@ namespace virusLib
 		return !m_dsp ? 0 : m_dsp->getEsxiClock().getSpeedInHz();
 	}
 
+	void Device::setNonRealtime(const bool _nonRealtime)
+	{
+		synthLib::Device::setNonRealtime(_nonRealtime);
+		if(m_dsp)
+			m_dsp->getAudio().setNonRealtime(_nonRealtime);
+		if(m_dsp2)
+			m_dsp2->getAudio().setNonRealtime(_nonRealtime);
+	}
+
 	void Device::applyDspMemoryPatches(const DspSingle* _dspA, const DspSingle* _dspB, const ROMFile& _rom)
 	{
 		DspMemoryPatches::apply(_dspA, _rom.getHash());

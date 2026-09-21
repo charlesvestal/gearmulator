@@ -148,6 +148,14 @@ namespace synthLib
 		return m_device->isValid();
 	}
 
+	void Plugin::setNonRealtime(const bool _nonRealtime)
+	{
+		std::lock_guard lock(m_lock);
+		m_nonRealtime = _nonRealtime;
+		if(m_device)
+			m_device->setNonRealtime(_nonRealtime);
+	}
+
 	void Plugin::setDevice(Device* _device)
 	{
 		if(!_device)
@@ -162,6 +170,7 @@ namespace synthLib
 
 		m_device = _device;
 
+		m_device->setNonRealtime(m_nonRealtime);
 		m_device->setSamplerate(m_deviceSamplerate);
 		if(!deviceState.empty())
 			setState(deviceState);

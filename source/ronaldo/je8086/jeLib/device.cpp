@@ -11,6 +11,7 @@
 #include <objc/message.h>
 #include <objc/runtime.h>
 #include <chrono>
+#include <thread>
 #include <cstdarg>
 #include <cstdio>
 #include <mutex>
@@ -306,6 +307,13 @@ namespace jeLib
 		return 4;	// H8S+ASIC0 | ASIC1 | ASIC2 | ASIC3
 	}
 
+	void Device::setNonRealtime(const bool _nonRealtime)
+	{
+		synthLib::Device::setNonRealtime(_nonRealtime);
+		if(m_thread)
+			m_thread->setNonRealtime(_nonRealtime);
+	}
+
 	uint32_t Device::getInternalLatencyMidiToOutput() const
 	{
 		// 4.5 ms, plus the pipeline's fixed delivery delay when it is running.
@@ -383,7 +391,20 @@ namespace jeLib
 		 * stalls the host's whole render graph, and in AUM nothing else made a
 		 * sound until the app was force-quit. Underrun into silence instead and
 		 * say so in the diagnostics. */
-		const auto usable = std::min(availBefore, _samples);
+		/* Offline, wait for the engine rather than underrunning. The host is not on
+		 * a realtime thread and has no deadline; silence here would be a hole in the
+		 * bounced file. Bounded all the same -- an engine that has actually died must
+		 * not hang the render forever, and 30 s is far beyond any legitimate wait for
+		 * one block. */
+		if(isNonRealtime() && sampleBuffer.size() < _samples)
+		{
+			const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
+
+			while(sampleBuffer.size() < _samples && std::chrono::steady_clock::now() < deadline)
+				std::this_thread::sleep_for(std::chrono::microseconds(100));
+		}
+
+		const auto usable = std::min(sampleBuffer.size(), _samples);
 
 		for (size_t i=0; i<usable; ++i)
 		{
