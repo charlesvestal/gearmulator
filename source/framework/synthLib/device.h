@@ -11,7 +11,6 @@
 #include "buildconfig.h"
 #include "midiTranslator.h"
 
-#include "baseLib/compilerdefs.h"
 #include "baseLib/md5.h"
 
 namespace synthLib
@@ -113,8 +112,6 @@ namespace synthLib
 		 * that has not opted in. The count is chosen at construction
 		 * (DeviceCreateParams::dspThreads) because it fixes the reported latency. */
 		virtual uint32_t getMaxDspThreads() const { return 1; }
-
-		BASELIB_NOINLINE virtual void release(std::vector<SMidiEvent>& _events);
 
 		auto& getMidiTranslator() { return m_midiTranslator; }
 
