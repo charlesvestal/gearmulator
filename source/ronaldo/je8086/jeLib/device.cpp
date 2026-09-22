@@ -391,29 +391,50 @@ namespace jeLib
 		 * stalls the host's whole render graph, and in AUM nothing else made a
 		 * sound until the app was force-quit. Underrun into silence instead and
 		 * say so in the diagnostics. */
-		/* Offline, wait for the engine rather than underrunning. The host is not on
-		 * a realtime thread and has no deadline; silence here would be a hole in the
-		 * bounced file. Bounded all the same -- an engine that has actually died must
-		 * not hang the render forever, and 30 s is far beyond any legitimate wait for
-		 * one block. */
-		if(isNonRealtime() && sampleBuffer.size() < _samples)
-		{
-			const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
+		/* Offline, wait for the engine rather than underrunning: the caller is not a
+		 * realtime thread and has no deadline, and silence here would be a hole in
+		 * the bounced file. Consume in whatever chunks the ring offers rather than
+		 * waiting for the whole block to be ready at once -- an offline host may ask
+		 * for more samples than the ring can hold (16384 frames), and waiting for
+		 * that many would wait forever while the producer sat blocked on a full ring.
+		 *
+		 * Bounded all the same: an engine that has actually died must not hang the
+		 * render, and 30 s is far beyond any legitimate wait.
+		 *
+		 * The realtime path is unchanged -- take what is there, once, and let the
+		 * rest be silence. NEVER block the host's audio thread: pop_front() waits
+		 * when the ring is empty, so an engine that falls behind would not merely go
+		 * quiet, it would stall the host's whole render graph. Measured in AUM:
+		 * nothing else made a sound until the app was force-quit. */
+		size_t usable = 0;
+		const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
 
-			while(sampleBuffer.size() < _samples && std::chrono::steady_clock::now() < deadline)
+		while(usable < _samples)
+		{
+			const auto avail = sampleBuffer.size();
+
+			if(!avail)
+			{
+				if(!isNonRealtime() || std::chrono::steady_clock::now() >= deadline)
+					break;
+
 				std::this_thread::sleep_for(std::chrono::microseconds(100));
-		}
+				continue;
+			}
 
-		const auto usable = std::min(sampleBuffer.size(), _samples);
+			const auto count = std::min(avail, _samples - usable);
 
-		for (size_t i=0; i<usable; ++i)
-		{
-			const auto s = sampleBuffer.pop_front();
+			for (size_t i=usable; i<usable+count; ++i)
+			{
+				const auto s = sampleBuffer.pop_front();
 
-			_outputs[0][i] = dspWordToFloat(s.first) * m_masterVolume;
-			_outputs[1][i] = dspWordToFloat(s.second) * m_masterVolume;
+				_outputs[0][i] = dspWordToFloat(s.first) * m_masterVolume;
+				_outputs[1][i] = dspWordToFloat(s.second) * m_masterVolume;
 
-			peak = std::max(peak, std::abs(_outputs[0][i]));
+				peak = std::max(peak, std::abs(_outputs[0][i]));
+			}
+
+			usable += count;
 		}
 
 		for (size_t i=usable; i<_samples; ++i)
