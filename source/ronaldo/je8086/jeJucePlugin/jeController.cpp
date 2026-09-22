@@ -85,6 +85,14 @@ namespace jeJucePlugin
 	{
 		const auto& desc = _parameter.getDescription();
 
+		/* The last step before the sysex goes to the emulated JP-8000. origin 3 is
+		 * HostAutomation, 4 is Ui -- if a host's automation reaches here with the
+		 * same page/index/part as a knob move that works, the plugin side is fine
+		 * and the question moves to the sysex. */
+		pluginLib::paramDiag("  sendParameterChange %s part=%u value=%d origin=%d page=%u index=%u",
+			desc.name.c_str(), _parameter.getPart(), static_cast<int>(_value),
+			static_cast<int>(_origin), desc.page, desc.index);
+
 		if (desc.page == g_paramPagePerformance)
 		{
 			// performance parameter

@@ -16,6 +16,9 @@ namespace pluginLib
 {
 	class Controller;
 
+	// Debugging build only, see parameter.cpp. A no-op unless TUS_PARAM_DIAGNOSTICS.
+	void paramDiag(const char* _fmt, ...);
+
 	class Parameter : juce::Value::Listener, public juce::RangedAudioParameter
 	{
     public:

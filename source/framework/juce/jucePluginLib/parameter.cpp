@@ -2,12 +2,60 @@
 
 #include "controller.h"
 
+#if TUS_PARAM_DIAGNOSTICS
+#include <chrono>
+#include <cstdarg>
+#include <cstdio>
+#include <mutex>
+#include <string>
+#endif
+
 namespace pluginLib
 {
 	namespace
 	{
 		std::set<Parameter*> g_aliveParameters;
 	}
+
+#if TUS_PARAM_DIAGNOSTICS
+	/* Where a parameter change came from and how far it got, for working out why a
+	 * host's automation does not reach the synth. An AUv3 has no console, so this
+	 * goes to a file in the extension's own container that devicectl can copy off.
+	 *
+	 * OFF unless TUS_PARAM_DIAGNOSTICS is defined at build time
+	 * (EXTRA_CXX_FLAGS=-DTUS_PARAM_DIAGNOSTICS=1). It writes from whatever thread
+	 * the change arrived on, the audio thread included, so it is a debugging build
+	 * only -- never ship it. */
+	void paramDiag(const char* _fmt, ...)
+	{
+		static FILE* f = [] () -> FILE*
+		{
+			const char* home = getenv("HOME");
+			if (!home) return nullptr;
+			const std::string path = std::string(home) + "/Documents/tus_param_diag.txt";
+			FILE* h = fopen(path.c_str(), "w");
+			if (h) setvbuf(h, nullptr, _IOLBF, 0);
+			return h;
+		}();
+		if (!f) return;
+
+		static std::mutex m;
+		const std::scoped_lock lock(m);
+
+		const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+			std::chrono::steady_clock::now().time_since_epoch()).count();
+		fprintf(f, "%lld ", static_cast<long long>(ms % 1000000));
+
+		va_list args;
+		va_start(args, _fmt);
+		vfprintf(f, _fmt, args);
+		va_end(args);
+		fputc('\n', f);
+		fflush(f);
+	}
+#else
+	void paramDiag(const char*, ...) {}
+#endif
 
 	Parameter::Parameter(Controller& _controller, const Description& _desc, const uint8_t _partNum, const int _uniqueId, const PartFormatter& _partFormatter)
 		: juce::RangedAudioParameter(genId(_desc, _partNum, _uniqueId), _partFormatter(_partNum, _desc.isNonPartSensitive()) + " " + _desc.displayName)
@@ -58,19 +106,28 @@ namespace pluginLib
 		jassert(m_range.getRange().contains(floatValue) || m_range.end == floatValue);
 
 		if (value == m_lastValue)
+		{
+			paramDiag("  sendToSynth %s part=%u value=%d SKIPPED (unchanged)", m_desc.name.c_str(), m_part, value);
 			return;
+		}
 
 		// ignore initial update
 		if (m_lastValue != -1)
 		{
 			if(m_rateLimit)
 			{
+				paramDiag("  sendToSynth %s part=%u value=%d DELAYED (rateLimit=%u)", m_desc.name.c_str(), m_part, value, m_rateLimit);
 				sendParameterChangeDelayed(value, _origin);
 			}
 			else
 			{
+				paramDiag("  sendToSynth %s part=%u value=%d NOW", m_desc.name.c_str(), m_part, value);
 				sendParameterChangeNow(value, _origin);
 			}
+		}
+		else
+		{
+			paramDiag("  sendToSynth %s part=%u value=%d SKIPPED (initial update)", m_desc.name.c_str(), m_part, value);
 		}
 
 		m_lastValue = value;
@@ -90,10 +147,20 @@ namespace pluginLib
 
 	void Parameter::scheduleTimer(const uint64_t _delayMs)
 	{
+		/* juce::Timer::callAfterDelay from the AUDIO thread is the thing to watch
+		 * here: host automation arrives there, and a timer started off the message
+		 * thread is not something JUCE promises will fire. */
+		paramDiag("  scheduleTimer %s part=%u delay=%llums msgThread=%d",
+			m_desc.name.c_str(), m_part, static_cast<unsigned long long>(_delayMs),
+			juce::MessageManager::existsAndIsCurrentThread() ? 1 : 0);
+
 		juce::Timer::callAfterDelay(static_cast<int>(_delayMs), [this]
 		{
 			if (g_aliveParameters.count(this))
+			{
+				paramDiag("  timer fired %s part=%u", m_desc.name.c_str(), m_part);
 				sendPendingParameterChange();
+			}
 		});
 	}
 
@@ -251,7 +318,16 @@ namespace pluginLib
 		// want it and VST2 doesn't do it either so why does Juce for VST3?
 		// It's not the host, it's the Juce VST3 implementation
 		if(m_notifyingHost)
+		{
+			paramDiag("setValue  %s part=%u norm=%.4f DROPPED (notifyingHost)",
+				m_desc.name.c_str(), m_part, _newValue);
 			return;
+		}
+
+		paramDiag("setValue  %s part=%u norm=%.4f -> %d  msgThread=%d",
+			m_desc.name.c_str(), m_part, _newValue,
+			juce::roundToInt(convertFrom0to1(_newValue)),
+			juce::MessageManager::existsAndIsCurrentThread() ? 1 : 0);
 
 		setUnnormalizedValue(juce::roundToInt(convertFrom0to1(_newValue)), Origin::HostAutomation);
 	}
