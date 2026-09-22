@@ -84,6 +84,11 @@ namespace pluginLib
 		 * before the device exists and getPlugin() would boot one to answer it. */
 		void setNonRealtime(bool _nonRealtime) noexcept override;
 
+		/* Called when the host drops continuity: transport relocate, graph reset, the
+		 * start of a freeze render. Like setNonRealtime, it must not boot a device
+		 * just to answer. */
+		void reset() override;
+
 		ProgramChangeRouter& getProgramChangeRouter() { return m_programChangeRouter; }
 
 		virtual synthLib::Device* createDevice() = 0;

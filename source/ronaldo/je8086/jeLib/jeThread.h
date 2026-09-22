@@ -30,6 +30,13 @@ namespace jeLib
 		 * both of the "never block the host" mechanisms below are turned off. The
 		 * backlog is not dropped and the push waits for room, which is what makes
 		 * every sample the host asked for actually get rendered. */
+		/* Drop audio the host will never play: the ring it would have been read from,
+		 * and the carry not yet handed to the worker. Called from the thread that
+		 * calls processSamples(), and only while it is not -- the consumer side of
+		 * the ring and the carry both belong to it. m_pendingJobs is deliberately
+		 * left alone: the worker owns that end and will drain it. */
+		void resetAudioState();
+
 		void setNonRealtime(const bool _nonRealtime) { m_nonRealtime.store(_nonRealtime, std::memory_order_relaxed); }
 		bool isNonRealtime() const { return m_nonRealtime.load(std::memory_order_relaxed); }
 

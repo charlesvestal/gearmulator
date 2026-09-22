@@ -124,6 +124,13 @@ namespace synthLib
 		 * Set from AudioProcessor::setNonRealtime(), which can be called before the
 		 * device exists, so Plugin remembers it and applies it to whatever device it
 		 * is given. */
+		/* The host is discarding continuity -- transport relocated, the graph reset,
+		 * a freeze render starting. Audio still in flight belongs to the old position
+		 * and playing it out puts the wrong samples at the head of the new one; a
+		 * device with buffered audio drops it here. NOT a device reset: the patch,
+		 * the firmware state and the voices are untouched. */
+		virtual void resetAudioState() {}
+
 		virtual void setNonRealtime(const bool _nonRealtime) { m_nonRealtime = _nonRealtime; }
 		bool isNonRealtime() const { return m_nonRealtime; }
 

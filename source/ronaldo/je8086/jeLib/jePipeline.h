@@ -8,21 +8,6 @@
 
 namespace jeLib
 {
-	/* Tell the pipeline how the caller is scheduled, so its worker threads can
-	 * mirror it one priority below. Call from the HOST'S AUDIO THREAD -- that is
-	 * the thread whose deadline we must not miss. Safe to call every block; it
-	 * does nothing unless the schedule changed, and nothing at all if the caller
-	 * is not realtime. */
-	void pipelineAdoptHostSchedule();
-
-	/* The host's audio workgroup, as a type-erased join callback -- jeLib cannot
-	 * depend on JUCE. Each pipeline stage calls it once when it is published and
-	 * again whenever it changes, so the stages are scheduled as one cohort
-	 * serving the host's render deadline instead of as independent realtime
-	 * threads. On Apple silicon this is the only mechanism that reliably keeps
-	 * helper threads on performance cores; there is no affinity API. */
-	void pipelineSetWorkgroupJoiner(std::function<void()> _join);
-
 	class Je8086;
 
 	/* Opt-in parallel ASIC pipeline.
@@ -66,6 +51,26 @@ namespace jeLib
 
 		bool valid() const { return m_valid; }
 		int numStages() const { return m_numStages; }
+
+		/* Tell this pipeline how the caller is scheduled, so its worker threads can
+		 * mirror it one priority below. Call from the HOST'S AUDIO THREAD -- that is
+		 * the thread whose deadline we must not miss. Safe to call every block; it
+		 * does nothing unless the schedule changed, and nothing at all if the caller
+		 * is not realtime. */
+		void adoptHostSchedule();
+
+		/* The host's audio workgroup, as a type-erased join callback -- jeLib cannot
+		 * depend on JUCE. Each pipeline stage calls it once when it is published and
+		 * again whenever it changes, so the stages are scheduled as one cohort
+		 * serving the host's render deadline instead of as independent realtime
+		 * threads. On Apple silicon this is the only mechanism that reliably keeps
+		 * helper threads on performance cores; there is no affinity API.
+		 *
+		 * Per pipeline. It was process-wide, which breaks as soon as a host loads two
+		 * instances in one process: the joiner captures the publishing plugin, so one
+		 * instance's workers joined another's workgroup, and an instance going away
+		 * left the rest holding a callable into freed memory. */
+		void setWorkgroupJoiner(std::function<void()> _join);
 
 		/* Called on the caller's thread from Je8086::step(): moves whatever the
 		 * last stage has finished into the caller's sample buffer. Audio must not

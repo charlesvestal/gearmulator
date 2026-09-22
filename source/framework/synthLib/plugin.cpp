@@ -148,6 +148,15 @@ namespace synthLib
 		return m_device->isValid();
 	}
 
+	void Plugin::resetAudioState()
+	{
+		// m_lock is what process() holds, so the device is never asked to drop audio
+		// while it is producing it.
+		std::lock_guard lock(m_lock);
+		if(m_device)
+			m_device->resetAudioState();
+	}
+
 	void Plugin::setNonRealtime(const bool _nonRealtime)
 	{
 		std::lock_guard lock(m_lock);

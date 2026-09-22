@@ -48,13 +48,15 @@ namespace jeLib
 			std::atomic<uint32_t> generation{0};
 		};
 
-		inline HostSchedule& hostSchedule()
+		struct HostWorkgroup
 		{
-			static HostSchedule s;
-			return s;
-		}
+			std::mutex mutex;
+			std::function<void()> joiner;
+			std::atomic<uint32_t> generation{0};
+		};
 
-		inline bool raiseRealtime()
+
+		inline bool raiseRealtime(HostSchedule& _hs)
 		{
 #ifdef __linux__
 			int policy = SCHED_FIFO;
@@ -70,7 +72,7 @@ namespace jeLib
 			}
 			else
 			{
-				policy = hostSchedule().policy.load(std::memory_order_relaxed);
+				policy = _hs.policy.load(std::memory_order_relaxed);
 
 				// The host is not realtime, so neither are we. Taking priority
 				// uninvited is rude, and pointless if nobody is waiting on us.
@@ -80,7 +82,7 @@ namespace jeLib
 				/* One step BELOW the host's audio thread: we are a producer it
 				 * waits on, not a peer, and outranking it only moves the
 				 * starvation elsewhere. */
-				prio = hostSchedule().priority.load(std::memory_order_relaxed) - 1;
+				prio = _hs.priority.load(std::memory_order_relaxed) - 1;
 
 				const int lo = sched_get_priority_min(policy);
 				if (prio < lo)
@@ -129,21 +131,25 @@ namespace jeLib
 		/* The host's audio workgroup, published by the plugin (jeLib cannot depend
 		 * on JUCE). Stage threads join it when it appears or changes, the same
 		 * generation-counter trick used for the host schedule -- the workgroup
-		 * arrives at prepareToPlay, which is after the stages have started. */
-		inline std::mutex& workgroupMutex() { static std::mutex m; return m; }
-		inline std::function<void()>& workgroupJoiner() { static std::function<void()> f; return f; }
-		inline std::atomic<uint32_t>& workgroupGeneration() { static std::atomic<uint32_t> g{0}; return g; }
-
-		inline void followWorkgroup(uint32_t& _seen)
+		 * arrives at prepareToPlay, which is after the stages have started.
+		 *
+		 * PER PIPELINE, not per process. These were file-level statics, which is
+		 * wrong as soon as a host loads two instances in one process -- as an iOS
+		 * AUv3 host does, in one extension process. The second instance's joiner
+		 * replaced the first's, so instance A's workers joined instance B's
+		 * workgroup; and the joiner captures the publishing PROCESSOR, so an
+		 * instance going away left every other instance holding a callable into
+		 * freed memory. */
+		inline void followWorkgroup(HostWorkgroup& _wg, uint32_t& _seen)
 		{
-			const auto gen = workgroupGeneration().load(std::memory_order_acquire);
+			const auto gen = _wg.generation.load(std::memory_order_acquire);
 			if (gen == _seen)
 				return;
 			_seen = gen;
 			std::function<void()> join;
 			{
-				std::scoped_lock lock(workgroupMutex());
-				join = workgroupJoiner();
+				std::scoped_lock lock(_wg.mutex);
+				join = _wg.joiner;
 			}
 			if (join)
 				join();
@@ -151,13 +157,13 @@ namespace jeLib
 
 		/* Cheap enough to sit in the sample loop: one relaxed load unless the
 		 * host's schedule actually changed. */
-		inline void followHostSchedule(uint32_t& _seen)
+		inline void followHostSchedule(HostSchedule& _hs, uint32_t& _seen)
 		{
-			const auto gen = hostSchedule().generation.load(std::memory_order_relaxed);
+			const auto gen = _hs.generation.load(std::memory_order_relaxed);
 			if (gen == _seen)
 				return;
 			_seen = gen;
-			raiseRealtime();
+			raiseRealtime(_hs);
 		}
 
 		inline void pinCore(const int _core)
@@ -269,6 +275,15 @@ namespace jeLib
 
 	struct JePipeline::Impl
 	{
+		// Per instance, deliberately: see the note on followWorkgroup().
+		HostSchedule hostSchedule;
+		HostWorkgroup workgroup;
+
+		// The thread driving stage 0, and what it has adopted. See deliver().
+		std::thread::id driverThread;
+		uint32_t driverSeenSchedule = 0;
+		uint32_t driverSeenWorkgroup = 0;
+
 		struct Handoff { int32_t gram[HandoffCount]; };
 		struct Audio { int32_t left, right; };
 		struct UcWrite { uint8_t asic, val; uint16_t addr; uint32_t sample; };
@@ -335,7 +350,7 @@ namespace jeLib
 		pinCore(core(0));
 		/* This runs on whichever thread drives step() -- JeThread -- and that
 		 * thread renders stage 0, so it needs the same treatment as the stages. */
-		raiseRealtime();
+		raiseRealtime(impl.hostSchedule);
 
 		for (int s = 1; s < m_numStages; ++s)
 			impl.threads[s] = std::thread([this, s, c = core(s)] { stageMain(s, c); });
@@ -414,7 +429,7 @@ namespace jeLib
 		};
 	}
 
-	void pipelineAdoptHostSchedule()
+	void JePipeline::adoptHostSchedule()
 	{
 #ifdef __linux__
 		int policy = 0;
@@ -422,7 +437,7 @@ namespace jeLib
 		if (pthread_getschedparam(pthread_self(), &policy, &sp) != 0)
 			return;
 
-		auto& hs = hostSchedule();
+		auto& hs = m_impl->hostSchedule;
 		if (hs.policy.load(std::memory_order_relaxed) == policy &&
 		    hs.priority.load(std::memory_order_relaxed) == sp.sched_priority)
 			return;
@@ -443,7 +458,7 @@ namespace jeLib
 
 		pinCore(_core);
 		baseLib::setFlushDenormalsToZero();	// FPCR is per thread
-		raiseRealtime();
+		raiseRealtime(impl.hostSchedule);
 
 		devices::g_je_parallel_mode = 2;
 		devices::g_je_stage_lo = lo;
@@ -505,8 +520,8 @@ namespace jeLib
 
 		while (!impl.shutdown.load(std::memory_order_relaxed))
 		{
-			followHostSchedule(seenSchedule);
-			followWorkgroup(seenWorkgroup);
+			followHostSchedule(impl.hostSchedule, seenSchedule);
+			followWorkgroup(impl.workgroup, seenWorkgroup);
 			/* Wait for our input handoff AND for the previous stage to have
 			 * published this sample, so forwarded register writes stamped with it
 			 * have all arrived. */
@@ -578,12 +593,27 @@ namespace jeLib
 	{
 		/* This runs on the thread driving step(), which renders stage 0 and so
 		 * needs the same priority as the stages. */
-		static thread_local uint32_t seenSchedule = 0;
-		static thread_local uint32_t seenWorkgroup = 0;
-		followHostSchedule(seenSchedule);
-		followWorkgroup(seenWorkgroup);
-
 		auto& impl = *m_impl;
+
+		/* What this driving thread has already adopted. Kept in Impl rather than in
+		 * a thread_local: one host audio thread can drive two instances, so the
+		 * state belongs to the pipeline, and a thread_local map keyed by pipeline
+		 * would allocate on the audio thread the first time each is seen.
+		 *
+		 * Only one thread drives a pipeline at a time, but a host may hand us a
+		 * DIFFERENT one later (AUv3 hosts do this on a render-resource rebuild), and
+		 * that thread has joined nothing -- so a change of driver re-adopts. */
+		const auto driver = std::this_thread::get_id();
+
+		if (impl.driverThread != driver)
+		{
+			impl.driverThread = driver;
+			impl.driverSeenSchedule = 0;
+			impl.driverSeenWorkgroup = 0;
+		}
+
+		followHostSchedule(impl.hostSchedule, impl.driverSeenSchedule);
+		followWorkgroup(impl.workgroup, impl.driverSeenWorkgroup);
 		const int64_t produced = impl.stage[0].samplesProduced.load(std::memory_order_acquire);
 
 		while (impl.delivered < produced)
@@ -615,12 +645,12 @@ namespace jeLib
 			asics.setReadback(a, impl.readback[a]);
 	}
 
-	void pipelineSetWorkgroupJoiner(std::function<void()> _join)
+	void JePipeline::setWorkgroupJoiner(std::function<void()> _join)
 	{
 		{
-			std::scoped_lock lock(workgroupMutex());
-			workgroupJoiner() = std::move(_join);
+			std::scoped_lock lock(m_impl->workgroup.mutex);
+			m_impl->workgroup.joiner = std::move(_join);
 		}
-		workgroupGeneration().fetch_add(1, std::memory_order_release);
+		m_impl->workgroup.generation.fetch_add(1, std::memory_order_release);
 	}
 }

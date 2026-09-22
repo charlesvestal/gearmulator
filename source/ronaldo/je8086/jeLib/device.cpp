@@ -307,6 +307,23 @@ namespace jeLib
 		return 4;	// H8S+ASIC0 | ASIC1 | ASIC2 | ASIC3
 	}
 
+	void Device::resetAudioState()
+	{
+		/* Everything the engine had produced for the old transport position. Without
+		 * this, a host that relocates or starts a freeze render gets up to a ring's
+		 * worth of audio from wherever the playhead used to be, before the first
+		 * sample it actually asked for.
+		 *
+		 * The engine itself is not reset: the patch, the firmware and the voices are
+		 * where the host left them. */
+		m_thread->resetAudioState();
+	}
+
+	void Device::setWorkgroupJoiner(std::function<void()> _join)
+	{
+		m_je8086->setWorkgroupJoiner(std::move(_join));
+	}
+
 	void Device::setNonRealtime(const bool _nonRealtime)
 	{
 		synthLib::Device::setNonRealtime(_nonRealtime);
@@ -349,7 +366,7 @@ namespace jeLib
 		 * below; without that the host's realtime thread blocks on SCHED_OTHER
 		 * workers, which is priority inversion and sounds exactly like the plugin
 		 * being too slow. No-op when there is no pipeline or no realtime host. */
-		pipelineAdoptHostSchedule();
+		m_je8086->adoptHostSchedule();
 
 #if defined(__APPLE__) && defined(JE_DEVICE_DIAGNOSTICS)
 		/* Self-test load. The measurement that matters is the engine under

@@ -101,11 +101,28 @@ namespace jeJucePlugin
 	{
 		m_audioWorkgroup = _workgroup;
 
-		/* Type-erased so jeLib stays free of JUCE. The token has to live for as
-		 * long as the thread stays in the workgroup, so it is thread_local: each
-		 * stage thread joins with its own, and rejoining with the same token
-		 * replaces the previous membership rather than stacking. */
-		jeLib::pipelineSetWorkgroupJoiner([this]
+		publishWorkgroup();
+	}
+
+	/* Type-erased so jeLib stays free of JUCE. The token has to live for as long as
+	 * the thread stays in the workgroup, so it is thread_local: each stage thread
+	 * joins with its own, and rejoining with the same token replaces the previous
+	 * membership rather than stacking.
+	 *
+	 * Handed to OUR device, not to a process-wide slot. The lambda captures this
+	 * processor, so a shared slot meant one instance's workers joining another
+	 * instance's workgroup -- and, once that instance had gone, calling into freed
+	 * memory. The device cannot outlive us, so the capture is safe.
+	 *
+	 * Called from both ends because the order is not fixed: the host may publish a
+	 * workgroup before the device exists (it is created lazily, on first use) or
+	 * after. */
+	void AudioPluginAudioProcessor::publishWorkgroup()
+	{
+		if(!m_jeDevice)
+			return;
+
+		m_jeDevice->setWorkgroupJoiner([this]
 		{
 			thread_local juce::WorkgroupToken token;
 			m_audioWorkgroup.join(token);
@@ -136,6 +153,13 @@ namespace jeJucePlugin
 		auto* d = new jeLib::Device(params);
 		if(!d->isValid())
 			throw synthLib::DeviceException(synthLib::DeviceError::FirmwareMissing, errorMsg);
+
+		/* The framework owns it from here; this is only so the workgroup can be
+		 * published to it. A device is always replaced through this function, so the
+		 * pointer is refreshed at the moment the previous one goes. */
+		m_jeDevice = d;
+		publishWorkgroup();
+
 		return d;
 	}
 

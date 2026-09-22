@@ -1,5 +1,7 @@
 #pragma once
 
+#include <functional>
+
 #include <h8s/h8sdevices.hpp>
 
 #include "je8086devices.h"
@@ -17,6 +19,12 @@ namespace jeLib
 	class Je8086
 	{
 	public:
+		/* Forwarded to the pipeline, which may not exist yet: the host publishes its
+		 * workgroup at prepareToPlay and the pipeline is not built until the first
+		 * step() on the driving thread, so the joiner is held until then. */
+		void setWorkgroupJoiner(std::function<void()> _join);
+		void adoptHostSchedule() const;
+
 		using SampleFrame = std::pair<int32_t, int32_t>; // left, right
 		using SampleBuffer = std::vector<SampleFrame>;
 
@@ -74,6 +82,7 @@ namespace jeLib
 		std::unique_ptr<JePipeline> m_pipeline;
 		std::vector<int> m_pipelineBounds, m_pipelineCores;
 		bool m_pipelineRequested = false;
+		std::function<void()> m_workgroupJoiner;	// published before the pipeline exists
 		int64_t m_pipelineWindow = 64;
 
 		synthLib::MidiBufferParser m_midiOutParser;

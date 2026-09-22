@@ -4,6 +4,11 @@
 
 #include "jucePluginEditorLib/pluginProcessor.h"
 
+namespace jeLib
+{
+	class Device;
+}
+
 namespace jeJucePlugin
 {
 	class AudioPluginAudioProcessor : public jucePluginEditorLib::Processor
@@ -29,7 +34,10 @@ namespace jeJucePlugin
 		size_t getSelectedRomIndex() const { return m_selectedRom; }
 
     private:
+		void publishWorkgroup();
+
 		juce::AudioWorkgroup m_audioWorkgroup;
+		jeLib::Device* m_jeDevice = nullptr;	// owned by the framework, see createDevice()
 		std::vector<jeLib::Rom> m_roms;
 		size_t m_selectedRom = 0;
 

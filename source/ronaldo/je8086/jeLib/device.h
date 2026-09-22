@@ -1,5 +1,7 @@
 #pragma once
 
+#include <functional>
+
 #include <chrono>
 
 #include <memory>
@@ -37,6 +39,12 @@ namespace jeLib
 		uint32_t getDspClockPercent() const override;
 		uint32_t getMaxDspThreads() const override;
 		void setNonRealtime(bool _nonRealtime) override;
+		void resetAudioState() override;
+
+		/* The host's audio workgroup, type-erased so jeLib stays free of JUCE. Set
+		 * by the plugin when the host publishes one; per device, so two instances in
+		 * one process do not overwrite each other's. */
+		void setWorkgroupJoiner(std::function<void()> _join);
 		uint32_t getInternalLatencyInputToOutput() const override;
 		uint64_t getDspClockHz() const override;
 

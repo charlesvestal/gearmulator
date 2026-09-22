@@ -99,6 +99,8 @@ namespace jeLib
 			m_pipeline.reset(new JePipeline(*this, m_pipelineBounds, m_pipelineCores));
 			if (!m_pipeline->valid())
 				m_pipeline.reset();	// bad split; stay serial
+			else if (m_workgroupJoiner)
+				m_pipeline->setWorkgroupJoiner(m_workgroupJoiner);
 		}
 
 		emu.step();
@@ -287,5 +289,18 @@ namespace jeLib
 				}
 			}
 		}
+	}
+
+	void Je8086::setWorkgroupJoiner(std::function<void()> _join)
+	{
+		m_workgroupJoiner = std::move(_join);
+		if (m_pipeline)
+			m_pipeline->setWorkgroupJoiner(m_workgroupJoiner);
+	}
+
+	void Je8086::adoptHostSchedule() const
+	{
+		if (m_pipeline)
+			m_pipeline->adoptHostSchedule();
 	}
 }

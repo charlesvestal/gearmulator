@@ -172,6 +172,13 @@ namespace pluginLib
 	    return *m_controller;
 	}
 
+	void Processor::reset()
+	{
+		const std::lock_guard lock(m_deviceCreateMutex);
+		if(m_plugin)
+			m_plugin->resetAudioState();
+	}
+
 	void Processor::setNonRealtime(const bool _nonRealtime) noexcept
 	{
 		juce::AudioProcessor::setNonRealtime(_nonRealtime);
@@ -1254,7 +1261,18 @@ namespace pluginLib
 
 	double Processor::getTailLengthSeconds() const
 	{
-		return 0.0f;
+		/* What a host must keep rendering after the last note-off before it may stop
+		 * and still have the output be complete. Zero said "nothing rings on", which
+		 * is not true of any of these: every one has a delay or a reverb in its
+		 * effects section, and a host that believed the zero -- a bounce, a freeze,
+		 * an offline render -- cut the tail off mid-decay at the end of the region.
+		 *
+		 * There is no way to ask the emulated firmware how long its longest tail is,
+		 * so this is a fixed figure, chosen to cover the longest effect these boards
+		 * offer rather than to be exact. The cost of being generous is a few seconds
+		 * of extra render at the end of a bounce; the cost of being short is audible
+		 * and unfixable after the fact. */
+		return 8.0;
 	}
 
 	synthLib::Device* Processor::onDeviceInvalid(synthLib::Device* _device)

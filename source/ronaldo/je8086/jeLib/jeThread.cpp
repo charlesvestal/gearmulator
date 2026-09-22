@@ -23,6 +23,15 @@ namespace jeLib
 		m_thread.reset();
 	}
 
+	void JeThread::resetAudioState()
+	{
+		m_audioOut.clear();
+
+		m_carry.samplesToProcess = 0;
+		m_carry.midiEvents.clear();
+		m_hasCarry = false;
+	}
+
 	void JeThread::processSamples(const uint32_t _count, uint32_t _requiredLatency, std::vector<synthLib::SMidiEvent>& _midiIn, std::vector<synthLib::SMidiEvent>& _midiOut)
 	{
 		ProcessJob job;

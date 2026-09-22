@@ -49,6 +49,7 @@ namespace synthLib
 		// Remembered, because the host may set it before a device exists and a device
 		// swap (a ROM change, a failed device replaced) must not lose it.
 		void setNonRealtime(bool _nonRealtime);
+		void resetAudioState();
 		bool isNonRealtime() const { return m_nonRealtime; }
 
 #if !SYNTHLIB_DEMO_MODE
