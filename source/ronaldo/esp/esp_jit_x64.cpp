@@ -154,9 +154,8 @@ namespace esp
 		if (instr.opType != kDMAC)
 		{
 			auto iramPos = m_pool.get(m_data.iramPos, Access::Read);
-			// const uint32_t mempos = ((uint32_t)instr.mem + iramPos) & IRAM_MASK;
-			m_asm.lea(tempB, ptr(iramPos, static_cast<int32_t>(instr.mem)));	// tempB = instr.mem + iramPos
-			m_asm.and_(tempB, 0xff); // tempB &= 0xff
+			// ESP_IRAM_MIRROR: mempos = (instr.mem & IRAM_MASK) + iramPos, into the 512-entry buffer, no wrap
+			m_asm.lea(tempB, ptr(iramPos, static_cast<int32_t>(instr.mem & 0xff)));
 
 			// int32_t mulInputA_24 = 0;
 			if (instr.useImm)
@@ -276,8 +275,8 @@ namespace esp
 
 				// writeIRAM(mulInputA_24, instr.mem | 0xf0);
 				auto iramPos = m_pool.get(m_data.iramPos, Access::Read);
-				m_asm.lea(tempB, ptr(iramPos, static_cast<int32_t>(instr.mem | 0xf0)));// tempB = instr.mem + iramPos
-				m_asm.and_(tempB, 0xff); // tempB &= 0xff
+				// ESP_IRAM_MIRROR: ((instr.mem | 0xf0) & IRAM_MASK) + iramPos, no wrap
+				m_asm.lea(tempB, ptr(iramPos, static_cast<int32_t>((instr.mem | 0xf0) & 0xff)));
 				m_asm.mov(iramPtr(tempB), mulInA.r32());
 			}
 			break;
